@@ -16,6 +16,7 @@ export function StageTwoDrawer({
   onApproveVersion,
   onRegenerate,
   onEnterPackaging,
+  canEnterPackaging,
 }: {
   open: boolean;
   task: Task;
@@ -29,12 +30,13 @@ export function StageTwoDrawer({
   onApproveVersion: (versionId: string) => void;
   onRegenerate: (promptNote: string) => void;
   onEnterPackaging: () => void;
+  canEnterPackaging: boolean;
 }) {
   const [promptNote, setPromptNote] = useState("");
   const selectedVersion = versions.find((version) => version.id === selectedVersionId);
   const canRegenerate = promptNote.trim().length > 0;
   const selectedVersionValid = selectedVersion ? isValidTaskVersion(selectedVersion, contentPages) : false;
-  const hasApprovedValidVersion = hasValidApprovedTaskVersion(versions, contentPages);
+  const hasApprovedValidVersion = hasValidApprovedTaskVersion(versions, contentPages) && canEnterPackaging;
 
   useEffect(() => {
     setPromptNote("");

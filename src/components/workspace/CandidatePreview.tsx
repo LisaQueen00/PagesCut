@@ -3,9 +3,17 @@ import type { PageVersion } from "@/types/domain";
 export function CandidatePreview({
   version,
   previewHtml,
+  stageLabel = "Stage 2",
+  title = "候选页面预览",
+  footerLabel,
+  statusLabel,
 }: {
   version: PageVersion;
   previewHtml: string;
+  stageLabel?: string;
+  title?: string;
+  footerLabel?: string;
+  statusLabel?: string;
 }) {
   return (
     <section className="soft-grid relative overflow-hidden rounded-[28px] border border-line/70 bg-white p-6 shadow-panel">
@@ -13,12 +21,10 @@ export function CandidatePreview({
       <div className="relative">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-xs uppercase tracking-[0.22em] text-muted">Stage 2</p>
-            <h2 className="mt-2 text-3xl font-semibold text-ink">候选页面预览</h2>
+            <p className="text-xs uppercase tracking-[0.22em] text-muted">{stageLabel}</p>
+            <h2 className="mt-2 text-3xl font-semibold text-ink">{title}</h2>
           </div>
-          {version.isApproved ? (
-            <span className="rounded-full bg-emerald-50 px-4 py-2 text-sm text-emerald-700">当前满意方案</span>
-          ) : null}
+          {statusLabel ? <span className="rounded-full bg-emerald-50 px-4 py-2 text-sm text-emerald-700">{statusLabel}</span> : version.isApproved ? <span className="rounded-full bg-emerald-50 px-4 py-2 text-sm text-emerald-700">当前满意方案</span> : null}
         </div>
 
         <div className="mt-7 rounded-[28px] border border-line/70 bg-[#fcfdff] p-6 shadow-sm">
@@ -26,8 +32,8 @@ export function CandidatePreview({
             <div className="mx-auto max-w-[920px]" dangerouslySetInnerHTML={{ __html: previewHtml }} />
           </div>
           <div className="mt-4 flex items-center justify-between gap-3 text-sm text-muted">
-            <span>{version.versionLabel} · 当前方案页级预览</span>
-            {version.isApproved ? <span className="text-emerald-700">当前已选为满意方案</span> : <span>候选方案预览中</span>}
+            <span>{footerLabel ?? `${version.versionLabel} · 当前方案页级预览`}</span>
+            {statusLabel ? <span className="text-emerald-700">{statusLabel}</span> : version.isApproved ? <span className="text-emerald-700">当前已选为满意方案</span> : <span>候选方案预览中</span>}
           </div>
         </div>
       </div>

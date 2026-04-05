@@ -45,7 +45,7 @@ export function Sidebar() {
               }`
             }
           >
-            查看最终产物
+            最终作品
           </NavLink>
         </SidebarSection>
 

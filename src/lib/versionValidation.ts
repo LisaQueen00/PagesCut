@@ -4,6 +4,10 @@ function hasRenderablePreview(value: unknown) {
   return typeof value === "string" && value.trim().length > 120 && value.includes("<article");
 }
 
+export function isRenderablePreviewHtml(value: unknown) {
+  return hasRenderablePreview(value);
+}
+
 export function isValidTaskVersion(version: PageVersion, contentPages: Page[]) {
   if (!version.versionLabel.trim() || !version.variantSummary.trim()) {
     return false;

@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { generatePdfFromFinalComposition } from "@/lib/pdfExport";
 import { isValidTaskVersion } from "@/lib/versionValidation";
+import { canEnterCandidatesStage, canEnterExportStage, canEnterHardEditStage, canEnterPackagingStage } from "@/lib/workflowGuards";
 import {
   buildMockPreviewHtml,
   buildPackagingPreviewHtml,
@@ -12,7 +14,10 @@ import {
 import { services } from "@/services";
 import type {
   Asset,
+  FinalComposition,
+  FinalCompositionPage,
   HardEditPageDraft,
+  PackagingPageCandidate,
   Page,
   PageVersion,
   Project,
@@ -27,7 +32,11 @@ interface AppState {
   projects: Project[];
   tasks: Task[];
   pages: Page[];
+  packagingPages: Page[];
+  packagingCandidates: PackagingPageCandidate[];
   pageVersions: PageVersion[];
+  finalCompositions: FinalComposition[];
+  finalCompositionPages: FinalCompositionPage[];
   hardEditDrafts: HardEditPageDraft[];
   assets: Asset[];
   activeTaskId: string | null;
@@ -38,11 +47,21 @@ interface AppState {
   setActiveTask: (taskId: string) => void;
   setTaskStage: (taskId: string, stage: StageKey) => void;
   setTaskWorkType: (taskId: string, workType: WorkType) => void;
+  setTaskPreferredExportFormat: (taskId: string, format: "pdf" | "pptx") => void;
   setTaskSelectedPage: (taskId: string, pageId: string) => void;
+  canEnterCandidatesStage: (taskId: string) => boolean;
+  canEnterPackagingStage: (taskId: string) => boolean;
+  canEnterHardEditStage: (taskId: string) => boolean;
+  canEnterExportStage: (taskId: string) => boolean;
+  getTaskFinalComposition: (taskId: string) => FinalComposition | undefined;
   enterCandidatesStage: (taskId: string) => void;
   enterPackagingStage: (taskId: string) => void;
   regeneratePackagingPage: (taskId: string, pageId: string) => void;
+  selectPackagingCandidate: (taskId: string, pageId: string, candidateId: string) => void;
+  approvePackagingCandidate: (taskId: string, pageId: string, candidateId: string) => void;
   enterHardEditStage: (taskId: string) => void;
+  enterExportStage: (taskId: string) => void;
+  createAssetFromFinalComposition: (taskId: string) => Promise<Asset | null>;
   updateHardEditDraft: (draftId: string, patch: Partial<HardEditPageDraft>) => void;
   saveHardEditDraft: (draftId: string) => void;
   updatePage: (pageId: string, patch: Partial<Page>) => void;
@@ -74,8 +93,24 @@ function createVersionId() {
   return `version-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function createPackagingCandidateId() {
+  return `packaging-candidate-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function createDraftId() {
   return `draft-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createCompositionId() {
+  return `composition-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createCompositionPageId() {
+  return `composition-page-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createAssetId() {
+  return `asset-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function asString(value: unknown, fallback = "") {
@@ -146,8 +181,19 @@ function normalizeUserProvidedBlock(input: unknown): UserProvidedContentBlock {
 }
 
 function normalizePage(page: Page): Page {
-  const inferredRole = page.pageRole ?? (page.pageType === "封面页" ? "cover" : page.pageType === "趋势综述" ? "overview" : page.pageType === "案例页" ? "case-study" : page.pageType === "结语页" ? "summary" : "feature");
+  const inferredRole =
+    page.pageRole ??
+    (page.pageType === "封面页"
+      ? "cover"
+      : page.pageType === "趋势综述"
+        ? "overview"
+        : page.pageType === "案例页"
+          ? "case-study"
+          : page.pageType === "结语页"
+            ? "summary"
+            : "feature");
   const inferredKind = page.pageKind ?? (inferredRole === "cover" || inferredRole === "toc" ? "packaging" : "content");
+
   return {
     ...page,
     renderSeed: typeof page.renderSeed === "number" ? page.renderSeed : 0,
@@ -178,6 +224,64 @@ function normalizePageVersion(version: PageVersion): PageVersion {
     derivedFromVersionId: version.derivedFromVersionId ?? null,
     previewsByPageId:
       version.previewsByPageId && typeof version.previewsByPageId === "object" ? version.previewsByPageId : {},
+  };
+}
+
+function normalizePackagingPageCandidate(candidate: PackagingPageCandidate): PackagingPageCandidate {
+  return {
+    ...candidate,
+    derivedFromCandidateId: candidate.derivedFromCandidateId ?? null,
+    promptNote: candidate.promptNote || "初版包装页候选",
+    summary: candidate.summary || "包装页候选结果",
+    previewHtml: typeof candidate.previewHtml === "string" ? candidate.previewHtml : "",
+    createdAt: typeof candidate.createdAt === "string" ? candidate.createdAt : new Date().toISOString(),
+  };
+}
+
+function normalizeFinalComposition(composition: FinalComposition): FinalComposition {
+  return {
+    ...composition,
+    packagingPageIds: Array.isArray(composition.packagingPageIds) ? composition.packagingPageIds : [],
+    approvedPackagingCandidateIds: Array.isArray(composition.approvedPackagingCandidateIds) ? composition.approvedPackagingCandidateIds : [],
+    frontCompositionPageIds: Array.isArray(composition.frontCompositionPageIds) ? composition.frontCompositionPageIds : [],
+    contentCompositionPageIds: Array.isArray(composition.contentCompositionPageIds) ? composition.contentCompositionPageIds : [],
+    rearCompositionPageIds: Array.isArray(composition.rearCompositionPageIds) ? composition.rearCompositionPageIds : [],
+    orderedCompositionPageIds: Array.isArray(composition.orderedCompositionPageIds) ? composition.orderedCompositionPageIds : [],
+    createdAt: typeof composition.createdAt === "string" ? composition.createdAt : new Date().toISOString(),
+    updatedAt: typeof composition.updatedAt === "string" ? composition.updatedAt : new Date().toISOString(),
+  };
+}
+
+function normalizeFinalCompositionPage(page: FinalCompositionPage): FinalCompositionPage {
+  return {
+    ...page,
+    createdAt: typeof page.createdAt === "string" ? page.createdAt : new Date().toISOString(),
+    previewHtml: typeof page.previewHtml === "string" ? page.previewHtml : "",
+  };
+}
+
+function normalizeHardEditDraft(draft: HardEditPageDraft): HardEditPageDraft {
+  return {
+    ...draft,
+    lastSavedAt: typeof draft.lastSavedAt === "string" ? draft.lastSavedAt : new Date().toISOString(),
+  };
+}
+
+function normalizeAsset(asset: Asset): Asset {
+  return {
+    ...asset,
+    compositionId: typeof asset.compositionId === "string" ? asset.compositionId : "unknown-composition",
+    title: typeof asset.title === "string" ? asset.title : asset.fileName,
+    exportFormat: asset.exportFormat ?? (asset.workType === "magazine" ? "pdf" : "pptx"),
+    pageCount: typeof asset.pageCount === "number" ? asset.pageCount : 0,
+    description: typeof asset.description === "string" ? asset.description : "",
+    sourceVersionId: typeof asset.sourceVersionId === "string" ? asset.sourceVersionId : "",
+    downloadUrl: typeof asset.downloadUrl === "string" ? asset.downloadUrl : "",
+    fileMimeType: typeof asset.fileMimeType === "string" ? asset.fileMimeType : "",
+    fileSizeBytes: typeof asset.fileSizeBytes === "number" ? asset.fileSizeBytes : 0,
+    readyAt: typeof asset.readyAt === "string" ? asset.readyAt : null,
+    errorMessage: typeof asset.errorMessage === "string" ? asset.errorMessage : "",
+    status: asset.status ?? "completed",
   };
 }
 
@@ -229,7 +333,14 @@ function getVersionFamilyFromLabel(versionLabel: string) {
   return (numeric - 1) % 3;
 }
 
-function createMockGeneratedVersion(taskId: string, pages: Page[], focusPage: Page, existingVersions: PageVersion[], selectedVersion: PageVersion | undefined, promptNote: string): PageVersion {
+function createMockGeneratedVersion(
+  taskId: string,
+  pages: Page[],
+  focusPage: Page,
+  existingVersions: PageVersion[],
+  selectedVersion: PageVersion | undefined,
+  promptNote: string,
+): PageVersion {
   const versionNumber = getNextVersionNumber(existingVersions);
   const versionLabel = `V${versionNumber}`;
   const variant = versionNumber - 1 + existingVersions.length;
@@ -283,42 +394,172 @@ function appendPackagingPreviewsToVersions(versions: PageVersion[], packagingPag
   });
 }
 
-function createHardEditDraft(page: Page, sourceVersion: PageVersion, allPages: Page[]): HardEditPageDraft {
-  const sourcePreviewHtml = sourceVersion.previewsByPageId[page.id] ?? "";
+function getNextPackagingCandidateNumber(candidates: PackagingPageCandidate[], pageId: string) {
+  return candidates.filter((candidate) => candidate.pageId === pageId).length + 1;
+}
+
+function createPackagingCandidate(
+  page: Page,
+  contentPages: Page[],
+  approvedVersion: PageVersion,
+  allCandidates: PackagingPageCandidate[],
+  variantSeed: number,
+  promptNote: string,
+  derivedFromCandidateId: string | null,
+) {
+  const candidateNumber = getNextPackagingCandidateNumber(allCandidates, page.id);
+  const roleLabel = page.pageRole === "cover" ? "封面方案" : "目录方案";
+  const candidateLabel = `${roleLabel} ${candidateNumber}`;
+  const summary =
+    page.pageRole === "cover"
+      ? `围绕刊名、主标题与主视觉节奏生成的${candidateLabel}`
+      : `基于已确认内容结构、顺序与标题生成的${candidateLabel}`;
+
+  return normalizePackagingPageCandidate({
+    id: createPackagingCandidateId(),
+    taskId: page.taskId,
+    pageId: page.id,
+    pageRole: page.pageRole === "cover" ? "cover" : "toc",
+    candidateLabel,
+    promptNote,
+    summary,
+    derivedFromCandidateId,
+    basedOnContentVersionId: approvedVersion.id,
+    previewHtml: buildPackagingPreviewHtml(page, contentPages, approvedVersion.versionLabel, variantSeed),
+    isSelected: true,
+    isApproved: false,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+function createInitialPackagingCandidates(pages: Page[], contentPages: Page[], approvedVersion: PageVersion) {
+  const candidates: PackagingPageCandidate[] = [];
+
+  pages.forEach((page, index) => {
+    const first = createPackagingCandidate(page, contentPages, approvedVersion, candidates, page.renderSeed + index, "初版包装页候选", null);
+    candidates.push(first);
+    const second = createPackagingCandidate(page, contentPages, approvedVersion, candidates, page.renderSeed + index + 1, "候选偏向：加强信息层级与版式区分", null);
+    candidates.push(second);
+  });
+
+  return candidates.map((candidate, _index, items) => ({
+    ...candidate,
+    isSelected:
+      [...items]
+        .reverse()
+        .find((item: PackagingPageCandidate) => item.pageId === candidate.pageId)?.id === candidate.id,
+  }));
+}
+
+function createFinalComposition(
+  taskId: string,
+  contentPages: Page[],
+  packagingPages: Page[],
+  approvedVersion: PageVersion,
+  packagingCandidates: PackagingPageCandidate[],
+) {
+  const compositionId = createCompositionId();
+  const now = new Date().toISOString();
+  const frontPages = packagingPages
+    .filter((page) => page.pageRole === "cover" || page.pageRole === "toc")
+    .sort((a, b) => {
+      const aRank = a.pageRole === "cover" ? 0 : 1;
+      const bRank = b.pageRole === "cover" ? 0 : 1;
+      return aRank - bRank || a.index - b.index;
+    });
+  const rearPages = packagingPages
+    .filter((page) => page.pageRole !== "cover" && page.pageRole !== "toc")
+    .sort((a, b) => a.index - b.index);
+  const orderedSourcePages = [...frontPages, ...contentPages.slice().sort((a, b) => a.index - b.index), ...rearPages];
+  const approvedPackagingCandidateMap = new Map(
+    packagingCandidates
+      .filter((candidate) => candidate.isApproved)
+      .map((candidate) => [candidate.pageId, candidate] as const),
+  );
+
+  const compositionPages = orderedSourcePages.map((page, index) => ({
+    id: createCompositionPageId(),
+    compositionId,
+    taskId,
+    sourcePageId: page.id,
+    sourceKind: page.pageKind === "content" ? "content-page" : "packaging-page",
+    sourceVersionId: page.pageKind === "content" ? approvedVersion.id : approvedPackagingCandidateMap.get(page.id)?.id ?? approvedVersion.id,
+    pageKind: page.pageKind,
+    pageRole: page.pageRole,
+    pageType: page.pageType,
+    pageBucket: page.pageKind === "content" ? "content" : page.pageRole === "cover" || page.pageRole === "toc" ? "front" : "rear",
+    orderIndex: index + 1,
+    previewHtml: page.pageKind === "content" ? approvedVersion.previewsByPageId[page.id] ?? "" : approvedPackagingCandidateMap.get(page.id)?.previewHtml ?? "",
+    createdAt: now,
+  } satisfies FinalCompositionPage));
+
+  const frontCompositionPageIds = compositionPages.filter((page) => page.pageBucket === "front").map((page) => page.id);
+  const contentCompositionPageIds = compositionPages.filter((page) => page.pageBucket === "content").map((page) => page.id);
+  const rearCompositionPageIds = compositionPages.filter((page) => page.pageBucket === "rear").map((page) => page.id);
+
+  const composition: FinalComposition = {
+    id: compositionId,
+    taskId,
+    approvedContentVersionId: approvedVersion.id,
+    packagingPageIds: packagingPages.map((page) => page.id),
+    approvedPackagingCandidateIds: packagingCandidates.filter((candidate) => candidate.isApproved).map((candidate) => candidate.id),
+    frontCompositionPageIds,
+    contentCompositionPageIds,
+    rearCompositionPageIds,
+    orderedCompositionPageIds: compositionPages.map((page) => page.id),
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  return {
+    composition,
+    compositionPages,
+  };
+}
+
+function createHardEditDraft(
+  compositionPage: FinalCompositionPage,
+  sourcePage: Page | undefined,
+  allContentPages: Page[],
+): HardEditPageDraft {
   const now = new Date().toISOString();
 
-  if (page.pageRole === "cover") {
+  if (compositionPage.pageRole === "cover") {
     return {
       id: createDraftId(),
-      taskId: page.taskId,
-      pageId: page.id,
-      sourceVersionId: sourceVersion.id,
-      sourcePreviewHtml,
-      title: page.coverMeta?.title ?? page.pageType,
-      subtitle: page.coverMeta?.subtitle ?? "",
-      bodyText: page.coverMeta?.heroLabel ?? "",
+      taskId: compositionPage.taskId,
+      compositionId: compositionPage.compositionId,
+      compositionPageId: compositionPage.id,
+      sourcePageId: compositionPage.sourcePageId,
+      sourceVersionId: compositionPage.sourceVersionId,
+      sourcePreviewHtml: compositionPage.previewHtml,
+      title: sourcePage?.coverMeta?.title ?? sourcePage?.pageType ?? compositionPage.pageType,
+      subtitle: sourcePage?.coverMeta?.subtitle ?? "",
+      bodyText: sourcePage?.coverMeta?.heroLabel ?? "",
       imageCaption: "主视觉区域说明",
       chartCaption: "",
-      footerNote: `${page.coverMeta?.issueLabel ?? ""} · ${page.coverMeta?.brandLabel ?? ""}`.trim(),
+      footerNote: `${sourcePage?.coverMeta?.issueLabel ?? ""} · ${sourcePage?.coverMeta?.brandLabel ?? ""}`.trim(),
       isDirty: false,
       lastSavedAt: now,
     };
   }
 
-  if (page.pageRole === "toc") {
-    const contentEntries = allPages
-      .filter((item) => item.taskId === page.taskId && item.pageKind === "content")
+  if (compositionPage.pageRole === "toc") {
+    const contentEntries = allContentPages
+      .slice()
       .sort((a, b) => a.index - b.index)
-      .map((item, index) => `${index + 1}. ${item.pageType}`)
+      .map((page, index) => `${index + 1}. ${page.pageType}`)
       .join("\n");
 
     return {
       id: createDraftId(),
-      taskId: page.taskId,
-      pageId: page.id,
-      sourceVersionId: sourceVersion.id,
-      sourcePreviewHtml,
-      title: page.pageType,
+      taskId: compositionPage.taskId,
+      compositionId: compositionPage.compositionId,
+      compositionPageId: compositionPage.id,
+      sourcePageId: compositionPage.sourcePageId,
+      sourceVersionId: compositionPage.sourceVersionId,
+      sourcePreviewHtml: compositionPage.previewHtml,
+      title: compositionPage.pageType,
       subtitle: "目录组织与阅读导航",
       bodyText: contentEntries,
       imageCaption: "",
@@ -329,24 +570,132 @@ function createHardEditDraft(page: Page, sourceVersion: PageVersion, allPages: P
     };
   }
 
-  const imageBlock = page.userProvidedContentBlocks.find((block) => block.type === "image");
-  const chartBlock = page.userProvidedContentBlocks.find((block) => block.type === "chart_desc");
+  const imageBlock = sourcePage?.userProvidedContentBlocks.find((block) => block.type === "image");
+  const chartBlock = sourcePage?.userProvidedContentBlocks.find((block) => block.type === "chart_desc");
 
   return {
     id: createDraftId(),
-    taskId: page.taskId,
-    pageId: page.id,
-    sourceVersionId: sourceVersion.id,
-    sourcePreviewHtml,
-    title: page.pageType,
-    subtitle: page.styleText,
-    bodyText: page.outlineText,
+    taskId: compositionPage.taskId,
+    compositionId: compositionPage.compositionId,
+    compositionPageId: compositionPage.id,
+    sourcePageId: compositionPage.sourcePageId,
+    sourceVersionId: compositionPage.sourceVersionId,
+    sourcePreviewHtml: compositionPage.previewHtml,
+    title: sourcePage?.pageType ?? compositionPage.pageType,
+    subtitle: sourcePage?.styleText ?? "",
+    bodyText: sourcePage?.outlineText ?? "",
     imageCaption: imageBlock?.type === "image" ? imageBlock.caption : "",
     chartCaption: chartBlock?.type === "chart_desc" ? chartBlock.description : "",
-    footerNote: page.userConstraints,
+    footerNote: sourcePage?.userConstraints ?? "",
     isDirty: false,
     lastSavedAt: now,
   };
+}
+
+function rebuildLegacyCompositionState(
+  tasks: Task[],
+  contentPages: Page[],
+  packagingPages: Page[],
+  pageVersions: PageVersion[],
+  packagingCandidates: PackagingPageCandidate[],
+  hardEditDrafts: Array<HardEditPageDraft | Record<string, unknown>>,
+) {
+  const compositions: FinalComposition[] = [];
+  const compositionPages: FinalCompositionPage[] = [];
+  const migratedDrafts: HardEditPageDraft[] = [];
+
+  tasks.forEach((task) => {
+    const taskContentPages = contentPages.filter((page) => page.taskId === task.id).sort((a, b) => a.index - b.index);
+    const taskPackagingPages = packagingPages.filter((page) => page.taskId === task.id).sort((a, b) => a.index - b.index);
+    const taskVersions = pageVersions.filter((version) => version.taskId === task.id);
+    const taskPackagingCandidates = packagingCandidates.filter((candidate) => candidate.taskId === task.id);
+
+    if (!canEnterHardEditStage(taskContentPages, taskPackagingPages, taskVersions, taskPackagingCandidates)) {
+      return;
+    }
+
+    const approvedVersion = taskVersions.find((version) => version.isApproved);
+    if (!approvedVersion) {
+      return;
+    }
+
+    const built = createFinalComposition(task.id, taskContentPages, taskPackagingPages, approvedVersion, taskPackagingCandidates);
+    const pageMap = new Map(
+      [...taskContentPages, ...taskPackagingPages].map((page) => [page.id, page]),
+    );
+
+    compositions.push(built.composition);
+    compositionPages.push(...built.compositionPages);
+
+    built.compositionPages.forEach((compositionPage) => {
+      const legacyDraft = hardEditDrafts.find((draft) => {
+        const legacy = draft as Record<string, unknown>;
+        return asString(legacy.taskId) === task.id && asString(legacy.pageId) === compositionPage.sourcePageId;
+      });
+
+      if (legacyDraft) {
+        const legacy = legacyDraft as Record<string, unknown>;
+        migratedDrafts.push(
+          normalizeHardEditDraft({
+            id: asString(legacy.id, createDraftId()),
+            taskId: task.id,
+            compositionId: built.composition.id,
+            compositionPageId: compositionPage.id,
+            sourcePageId: compositionPage.sourcePageId,
+            sourceVersionId: asString(legacy.sourceVersionId, compositionPage.sourceVersionId),
+            sourcePreviewHtml: asString(legacy.sourcePreviewHtml, compositionPage.previewHtml),
+            title: asString(legacy.title, compositionPage.pageType),
+            subtitle: asString(legacy.subtitle),
+            bodyText: asString(legacy.bodyText),
+            imageCaption: asString(legacy.imageCaption),
+            chartCaption: asString(legacy.chartCaption),
+            footerNote: asString(legacy.footerNote),
+            isDirty: Boolean(legacy.isDirty),
+            lastSavedAt: asString(legacy.lastSavedAt, new Date().toISOString()),
+          }),
+        );
+        return;
+      }
+
+      migratedDrafts.push(createHardEditDraft(compositionPage, pageMap.get(compositionPage.sourcePageId), taskContentPages));
+    });
+  });
+
+  return {
+    compositions,
+    compositionPages,
+    migratedDrafts,
+  };
+}
+
+function rebuildLegacyPackagingCandidates(tasks: Task[], packagingPages: Page[], contentPages: Page[], pageVersions: PageVersion[]) {
+  return tasks.flatMap((task) => {
+    const approvedVersion = pageVersions.find((version) => version.taskId === task.id && version.isApproved);
+    if (!approvedVersion) {
+      return [];
+    }
+
+    const taskPackagingPages = packagingPages.filter((page) => page.taskId === task.id);
+    const taskContentPages = contentPages.filter((page) => page.taskId === task.id).sort((a, b) => a.index - b.index);
+
+    return taskPackagingPages.map((page, index) =>
+      normalizePackagingPageCandidate({
+        id: createPackagingCandidateId(),
+        taskId: task.id,
+        pageId: page.id,
+        pageRole: page.pageRole === "cover" ? "cover" : "toc",
+        candidateLabel: page.pageRole === "cover" ? "封面方案 1" : "目录方案 1",
+        promptNote: "从旧版包装页状态迁移的当前结果",
+        summary: page.pageRole === "cover" ? "沿用当前封面页结果作为默认已选包装方案" : "沿用当前目录页结果作为默认已选包装方案",
+        derivedFromCandidateId: null,
+        basedOnContentVersionId: approvedVersion.id,
+        previewHtml: buildPackagingPreviewHtml(page, taskContentPages, approvedVersion.versionLabel, page.renderSeed + index),
+        isSelected: true,
+        isApproved: true,
+        createdAt: new Date().toISOString(),
+      }),
+    );
+  });
 }
 
 export const useAppStore = create<AppState>()(
@@ -355,7 +704,11 @@ export const useAppStore = create<AppState>()(
       projects: [],
       tasks: [],
       pages: [],
+      packagingPages: [],
+      packagingCandidates: [],
       pageVersions: [],
+      finalCompositions: [],
+      finalCompositionPages: [],
       hardEditDrafts: [],
       assets: [],
       activeTaskId: null,
@@ -370,8 +723,12 @@ export const useAppStore = create<AppState>()(
         set({
           projects: [seed.project],
           tasks: [seed.task],
-          pages: seed.pages.map((page) => normalizePage(page)),
+          pages: seed.pages.map((page) => normalizePage(page)).filter((page) => page.pageKind === "content"),
+          packagingPages: [],
+          packagingCandidates: [],
           pageVersions: seed.pageVersions.map((version) => normalizePageVersion(version)),
+          finalCompositions: [],
+          finalCompositionPages: [],
           hardEditDrafts: [],
           assets: seed.assets,
           activeTaskId: seed.task.id,
@@ -381,6 +738,7 @@ export const useAppStore = create<AppState>()(
       createTask: async (prompt, workType) => {
         set({ isGenerating: true });
         const result = await services.createTaskFromPrompt(prompt, workType);
+        const normalizedPages = result.pages.map((page) => normalizePage(page));
 
         set((state) => ({
           projects: replaceById(state.projects, {
@@ -390,11 +748,15 @@ export const useAppStore = create<AppState>()(
             isDefault: true,
           }),
           tasks: [...state.tasks, result.task],
-          pages: [...state.pages.filter((page) => page.taskId !== result.task.id), ...result.pages],
+          pages: [...state.pages.filter((page) => page.taskId !== result.task.id), ...normalizedPages.filter((page) => page.pageKind === "content")],
+          packagingPages: state.packagingPages.filter((page) => page.taskId !== result.task.id),
+          packagingCandidates: state.packagingCandidates.filter((candidate) => candidate.taskId !== result.task.id),
           pageVersions: [
             ...state.pageVersions,
-            ...createInitialPageVersions(result.task.id, result.pages).map((version) => normalizePageVersion(version)),
+            ...createInitialPageVersions(result.task.id, normalizedPages.filter((page) => page.pageKind === "content")).map((version) => normalizePageVersion(version)),
           ],
+          finalCompositions: state.finalCompositions.filter((item) => item.taskId !== result.task.id),
+          finalCompositionPages: state.finalCompositionPages.filter((page) => page.taskId !== result.task.id),
           hardEditDrafts: state.hardEditDrafts.filter((draft) => draft.taskId !== result.task.id),
           activeTaskId: result.task.id,
           isGenerating: false,
@@ -428,11 +790,42 @@ export const useAppStore = create<AppState>()(
           tasks: state.tasks.map((task) => (task.id === taskId ? { ...task, workType } : task)),
         }));
       },
+      setTaskPreferredExportFormat: (taskId, format) => {
+        set((state) => ({
+          tasks: state.tasks.map((task) => (task.id === taskId ? { ...task, preferredExportFormat: format } : task)),
+        }));
+      },
       setTaskSelectedPage: (taskId, pageId) => {
         set((state) => ({
           tasks: state.tasks.map((task) => (task.id === taskId ? { ...task, selectedPageId: pageId } : task)),
         }));
       },
+      canEnterCandidatesStage: (taskId) => canEnterCandidatesStage(get().pages.filter((page) => page.taskId === taskId)),
+      canEnterPackagingStage: (taskId) => {
+        const state = get();
+        return canEnterPackagingStage(
+          state.pages.filter((page) => page.taskId === taskId),
+          state.pageVersions.filter((version) => version.taskId === taskId),
+        );
+      },
+      canEnterHardEditStage: (taskId) => {
+        const state = get();
+        return canEnterHardEditStage(
+          state.pages.filter((page) => page.taskId === taskId),
+          state.packagingPages.filter((page) => page.taskId === taskId),
+          state.pageVersions.filter((version) => version.taskId === taskId),
+          state.packagingCandidates.filter((candidate) => candidate.taskId === taskId),
+        );
+      },
+      canEnterExportStage: (taskId) => {
+        const state = get();
+        return canEnterExportStage(
+          state.finalCompositions.find((item) => item.taskId === taskId),
+          state.finalCompositionPages.filter((page) => page.taskId === taskId),
+          state.hardEditDrafts.filter((draft) => draft.taskId === taskId),
+        );
+      },
+      getTaskFinalComposition: (taskId) => get().finalCompositions.find((item) => item.taskId === taskId),
       enterCandidatesStage: (taskId) => {
         set((state) => {
           const task = state.tasks.find((item) => item.id === taskId);
@@ -440,12 +833,26 @@ export const useAppStore = create<AppState>()(
             return state;
           }
 
-          const taskPages = state.pages.filter((page) => page.taskId === taskId);
+          const taskPages = state.pages.filter((page) => page.taskId === taskId).sort((a, b) => a.index - b.index);
+          if (!canEnterCandidatesStage(taskPages)) {
+            return state;
+          }
+
           const existingVersions = state.pageVersions.filter((version) => version.taskId === taskId);
-          const createdVersions = existingVersions.length ? [] : createInitialPageVersions(taskId, taskPages).map((version) => normalizePageVersion(version));
+          const createdVersions = existingVersions.length
+            ? []
+            : createInitialPageVersions(taskId, taskPages).map((version) => normalizePageVersion(version));
 
           return {
-            tasks: state.tasks.map((item) => (item.id === taskId ? { ...item, currentStage: "candidates" } : item)),
+            tasks: state.tasks.map((item) =>
+              item.id === taskId
+                ? {
+                    ...item,
+                    currentStage: "candidates",
+                    selectedPageId: taskPages[0]?.id ?? item.selectedPageId,
+                  }
+                : item,
+            ),
             pageVersions: [...state.pageVersions, ...createdVersions],
           };
         });
@@ -457,24 +864,26 @@ export const useAppStore = create<AppState>()(
             return state;
           }
 
-          const taskPages = state.pages.filter((page) => page.taskId === taskId);
-          const contentPages = taskPages.filter((page) => page.pageKind === "content").sort((a, b) => a.index - b.index);
-          const hasApprovedValidVersion = state.pageVersions.some(
-            (version) => version.taskId === taskId && version.isApproved && isValidTaskVersion(version, contentPages),
-          );
-          if (!hasApprovedValidVersion) {
+          const contentPages = state.pages.filter((page) => page.taskId === taskId).sort((a, b) => a.index - b.index);
+          const taskVersions = state.pageVersions.filter((version) => version.taskId === taskId);
+          if (!canEnterPackagingStage(contentPages, taskVersions)) {
             return state;
           }
-          const existingPackagingPages = taskPages.filter((page) => page.pageKind !== "content");
+
+          const existingPackagingPages = state.packagingPages.filter((page) => page.taskId === taskId);
           const packagingPages = existingPackagingPages.length
             ? existingPackagingPages
             : createDeferredPackagingPages(taskId, contentPages.length + 1).map((page) => normalizePage(page));
+          const approvedVersion = taskVersions.find((version) => version.isApproved);
+          if (!approvedVersion) {
+            return state;
+          }
+          const taskPackagingCandidates = state.packagingCandidates.filter((candidate) => candidate.taskId === taskId);
+          const nextPackagingCandidates = taskPackagingCandidates.length
+            ? taskPackagingCandidates
+            : createInitialPackagingCandidates(packagingPages, contentPages, approvedVersion);
 
-          const updatedVersions = appendPackagingPreviewsToVersions(
-            state.pageVersions.filter((version) => version.taskId === taskId),
-            packagingPages,
-            contentPages,
-          );
+          const updatedVersions = appendPackagingPreviewsToVersions(taskVersions, packagingPages, contentPages);
 
           return {
             tasks: state.tasks.map((item) =>
@@ -486,11 +895,17 @@ export const useAppStore = create<AppState>()(
                     hasGeneratedCoverPage: packagingPages.some((page) => page.pageRole === "cover"),
                     hasDerivedTocPage: packagingPages.some((page) => page.pageRole === "toc"),
                     selectedPageId: packagingPages[0]?.id ?? item.selectedPageId,
-                    pageIds: [...item.pageIds, ...packagingPages.filter((page) => !item.pageIds.includes(page.id)).map((page) => page.id)],
                   }
                 : item,
             ),
-            pages: [...state.pages, ...packagingPages.filter((page) => !state.pages.some((item) => item.id === page.id))],
+            packagingPages: [
+              ...state.packagingPages.filter((page) => page.taskId !== taskId),
+              ...packagingPages,
+            ],
+            packagingCandidates: [
+              ...state.packagingCandidates.filter((candidate) => candidate.taskId !== taskId),
+              ...nextPackagingCandidates,
+            ],
             pageVersions: [
               ...state.pageVersions.filter((version) => version.taskId !== taskId),
               ...updatedVersions,
@@ -500,12 +915,18 @@ export const useAppStore = create<AppState>()(
       },
       regeneratePackagingPage: (taskId, pageId) => {
         set((state) => {
-          const packagingPage = state.pages.find((page) => page.id === pageId && page.taskId === taskId && page.pageKind !== "content");
+          const packagingPage = state.packagingPages.find((page) => page.id === pageId && page.taskId === taskId);
           if (!packagingPage) {
             return state;
           }
 
-          const contentPages = state.pages.filter((page) => page.taskId === taskId && page.pageKind === "content").sort((a, b) => a.index - b.index);
+          const contentPages = state.pages.filter((page) => page.taskId === taskId).sort((a, b) => a.index - b.index);
+          const approvedVersion = state.pageVersions.find((version) => version.taskId === taskId && version.isApproved);
+          if (!approvedVersion) {
+            return state;
+          }
+          const existingCandidates = state.packagingCandidates.filter((candidate) => candidate.taskId === taskId);
+          const currentSelectedCandidate = existingCandidates.find((candidate) => candidate.pageId === pageId && candidate.isSelected);
           const updatedPage = normalizePage({
             ...packagingPage,
             renderSeed: packagingPage.renderSeed + 1,
@@ -524,55 +945,232 @@ export const useAppStore = create<AppState>()(
                   }
                 : packagingPage.coverMeta,
           });
-          const updatedVersions = state.pageVersions
-            .filter((version) => version.taskId === taskId)
-            .map((version) => {
-              const family = getVersionFamilyFromLabel(version.versionLabel);
-              return normalizePageVersion({
-                ...version,
-                previewsByPageId: {
-                  ...version.previewsByPageId,
-                  [pageId]: buildPackagingPreviewHtml(updatedPage, contentPages, version.versionLabel, updatedPage.renderSeed, family),
-                },
-              });
-            });
+          const nextCandidate = createPackagingCandidate(
+            updatedPage,
+            contentPages,
+            approvedVersion,
+            existingCandidates,
+            updatedPage.renderSeed,
+            updatedPage.pageRole === "cover" ? "再生成：调整封面信息层级与主视觉表达" : "再生成：基于内容结构调整目录组织方式",
+            currentSelectedCandidate?.id ?? null,
+          );
+          const updatedCandidates = [
+            ...existingCandidates.map((candidate) =>
+              candidate.pageId === pageId ? { ...candidate, isSelected: false, isApproved: false } : candidate,
+            ),
+            nextCandidate,
+          ];
 
           return {
-            pages: state.pages.map((page) => (page.id === pageId ? updatedPage : page)),
-            pageVersions: [
-              ...state.pageVersions.filter((version) => version.taskId !== taskId),
-              ...updatedVersions,
+            packagingPages: state.packagingPages.map((page) => (page.id === pageId ? updatedPage : page)),
+            packagingCandidates: [
+              ...state.packagingCandidates.filter((candidate) => candidate.taskId !== taskId),
+              ...updatedCandidates,
             ],
           };
         });
       },
+      selectPackagingCandidate: (taskId, pageId, candidateId) => {
+        set((state) => ({
+          packagingCandidates: state.packagingCandidates.map((candidate) =>
+            candidate.taskId === taskId && candidate.pageId === pageId
+              ? { ...candidate, isSelected: candidate.id === candidateId }
+              : candidate,
+          ),
+        }));
+      },
+      approvePackagingCandidate: (taskId, pageId, candidateId) => {
+        set((state) => ({
+          packagingCandidates: state.packagingCandidates.map((candidate) =>
+            candidate.taskId === taskId && candidate.pageId === pageId
+              ? {
+                  ...candidate,
+                  isSelected: candidate.id === candidateId ? true : candidate.isSelected,
+                  isApproved: candidate.id === candidateId,
+                }
+              : candidate,
+          ),
+        }));
+      },
       enterHardEditStage: (taskId) => {
         set((state) => {
-          const taskPages = state.pages.filter((page) => page.taskId === taskId);
-          const approvedVersion = state.pageVersions.find((version) => version.taskId === taskId && version.isApproved);
-          const contentPages = taskPages.filter((page) => page.pageKind === "content");
-          if (!approvedVersion || !isValidTaskVersion(approvedVersion, contentPages)) {
+          const task = state.tasks.find((item) => item.id === taskId);
+          if (!task) {
             return state;
           }
 
-          const drafts = taskPages.map((page) => createHardEditDraft(page, approvedVersion, taskPages));
+          const contentPages = state.pages.filter((page) => page.taskId === taskId).sort((a, b) => a.index - b.index);
+          const packagingPages = state.packagingPages.filter((page) => page.taskId === taskId).sort((a, b) => a.index - b.index);
+          const taskVersions = state.pageVersions.filter((version) => version.taskId === taskId);
+          const taskPackagingCandidates = state.packagingCandidates.filter((candidate) => candidate.taskId === taskId);
+
+          if (!canEnterHardEditStage(contentPages, packagingPages, taskVersions, taskPackagingCandidates)) {
+            return state;
+          }
+
+          const approvedVersion = taskVersions.find((version) => version.isApproved);
+          if (!approvedVersion) {
+            return state;
+          }
+
+          const builtComposition = createFinalComposition(taskId, contentPages, packagingPages, approvedVersion, taskPackagingCandidates);
+          const sourcePageMap = new Map([...contentPages, ...packagingPages].map((page) => [page.id, page]));
+          const drafts = builtComposition.compositionPages.map((compositionPage) =>
+            createHardEditDraft(compositionPage, sourcePageMap.get(compositionPage.sourcePageId), contentPages),
+          );
 
           return {
-            tasks: state.tasks.map((task) =>
-              task.id === taskId
+            tasks: state.tasks.map((item) =>
+              item.id === taskId
                 ? {
-                    ...task,
+                    ...item,
                     currentStage: "hard-edit",
                     packagingStageStatus: "approved",
+                    selectedPageId: builtComposition.composition.orderedCompositionPageIds[0] ?? item.selectedPageId,
+                    status: "ready_for_export",
                   }
-                : task,
+                : item,
             ),
+            finalCompositions: [
+              ...state.finalCompositions.filter((item) => item.taskId !== taskId),
+              builtComposition.composition,
+            ],
+            finalCompositionPages: [
+              ...state.finalCompositionPages.filter((page) => page.taskId !== taskId),
+              ...builtComposition.compositionPages,
+            ],
             hardEditDrafts: [
               ...state.hardEditDrafts.filter((draft) => draft.taskId !== taskId),
               ...drafts,
             ],
           };
         });
+      },
+      enterExportStage: (taskId) => {
+        set((state) => {
+          const task = state.tasks.find((item) => item.id === taskId);
+          if (!task) {
+            return state;
+          }
+
+          const finalComposition = state.finalCompositions.find((item) => item.taskId === taskId);
+          const finalCompositionPages = state.finalCompositionPages.filter((page) => page.taskId === taskId);
+          const taskDrafts = state.hardEditDrafts.filter((draft) => draft.taskId === taskId);
+
+          if (!canEnterExportStage(finalComposition, finalCompositionPages, taskDrafts)) {
+            return state;
+          }
+
+          return {
+            tasks: state.tasks.map((item) =>
+              item.id === taskId
+                ? {
+                    ...item,
+                    currentStage: "export",
+                    status: "ready_for_export",
+                    preferredExportFormat: "pdf",
+                  }
+                : item,
+            ),
+          };
+        });
+      },
+      createAssetFromFinalComposition: async (taskId) => {
+        const state = get();
+        const task = state.tasks.find((item) => item.id === taskId);
+        const finalComposition = state.finalCompositions.find((item) => item.taskId === taskId);
+        const finalCompositionPages = state.finalCompositionPages.filter((page) => page.taskId === taskId);
+        const taskDrafts = state.hardEditDrafts.filter((draft) => draft.taskId === taskId);
+
+        if (!task || !canEnterExportStage(finalComposition, finalCompositionPages, taskDrafts) || !finalComposition) {
+          return null;
+        }
+
+        const existingAsset = state.assets.find((asset) => asset.compositionId === finalComposition.id);
+        const coverDraft = taskDrafts.find((draft) => {
+          const page = finalCompositionPages.find((item) => item.id === draft.compositionPageId);
+          return page?.pageRole === "cover";
+        });
+        const exportFormat = "pdf";
+        const title = coverDraft?.title || task.title;
+        const pageTypes = finalCompositionPages.map((page) => page.pageType);
+        const assetId = existingAsset?.id ?? createAssetId();
+        const baseAsset = normalizeAsset({
+          id: assetId,
+          taskId,
+          compositionId: finalComposition.id,
+          title,
+          fileName: `${title.replace(/\s+/g, "_") || "PagesCut_Export"}.pdf`,
+          workType: task.workType,
+          exportFormat,
+          pageCount: finalCompositionPages.length,
+          description: `基于当前 Final Composition 生成的 PDF 文件，包含 ${pageTypes.slice(0, 4).join(" / ")}${pageTypes.length > 4 ? " 等页面" : ""}。`,
+          sourceVersionId: finalComposition.approvedContentVersionId,
+          createdAt: existingAsset?.createdAt ?? new Date().toISOString(),
+          downloadUrl: "",
+          fileMimeType: "",
+          fileSizeBytes: 0,
+          readyAt: null,
+          errorMessage: "",
+          status: "preparing",
+        });
+
+        set((current) => ({
+          tasks: current.tasks.map((item) => (item.id === taskId ? { ...item, preferredExportFormat: "pdf" } : item)),
+          assets: current.assets.some((item) => item.id === assetId)
+            ? current.assets.map((item) => (item.id === assetId ? baseAsset : item))
+            : [baseAsset, ...current.assets],
+        }));
+
+        await Promise.resolve();
+
+        set((current) => ({
+          assets: current.assets.map((item) =>
+            item.id === assetId
+              ? {
+                  ...item,
+                  status: "processing",
+                  errorMessage: "",
+                }
+              : item,
+          ),
+        }));
+
+        try {
+          const pdfFile = await generatePdfFromFinalComposition({
+            task: { ...task, preferredExportFormat: "pdf" },
+            composition: finalComposition,
+            compositionPages: finalCompositionPages,
+            drafts: taskDrafts,
+          });
+
+          const completedAsset = normalizeAsset({
+            ...baseAsset,
+            downloadUrl: pdfFile.dataUrl,
+            fileMimeType: pdfFile.mimeType,
+            fileSizeBytes: pdfFile.byteSize,
+            readyAt: new Date().toISOString(),
+            status: "completed",
+          });
+
+          set((current) => ({
+            assets: current.assets.map((item) => (item.id === assetId ? completedAsset : item)),
+          }));
+
+          return completedAsset;
+        } catch (error) {
+          const failedAsset = normalizeAsset({
+            ...baseAsset,
+            status: "failed",
+            errorMessage: error instanceof Error ? error.message : "PDF 导出失败。",
+          });
+
+          set((current) => ({
+            assets: current.assets.map((item) => (item.id === assetId ? failedAsset : item)),
+          }));
+
+          return null;
+        }
       },
       updateHardEditDraft: (draftId, patch) => {
         set((state) => ({
@@ -710,7 +1308,7 @@ export const useAppStore = create<AppState>()(
       },
       approveTaskVersion: (taskId, versionId) => {
         set((state) => {
-          const contentPages = state.pages.filter((page) => page.taskId === taskId && page.pageKind === "content");
+          const contentPages = state.pages.filter((page) => page.taskId === taskId);
           const target = state.pageVersions.find((version) => version.id === versionId && version.taskId === taskId);
           if (!target || !isValidTaskVersion(target, contentPages)) {
             return state;
@@ -744,8 +1342,7 @@ export const useAppStore = create<AppState>()(
           const taskVersions = state.pageVersions.filter((version) => version.taskId === taskId);
           const selectedVersion = taskVersions.find((version) => version.isSelected);
           const nextVersion = createMockGeneratedVersion(taskId, taskPages, focusPage, taskVersions, selectedVersion, promptNote);
-          const contentPages = taskPages.filter((page) => page.pageKind === "content");
-          if (!isValidTaskVersion(nextVersion, contentPages)) {
+          if (!isValidTaskVersion(nextVersion, taskPages)) {
             return state;
           }
 
@@ -762,22 +1359,34 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: "pagescut-v1",
-      version: 6,
+      version: 8,
       migrate: (persistedState) => {
         const state = persistedState as Partial<AppState> | undefined;
         if (!state) {
           return persistedState as AppState;
         }
 
-        const normalizedPages = Array.isArray(state.pages) ? state.pages.map((page) => normalizePage(page)) : [];
+        const normalizedAllPages = Array.isArray(state.pages) ? state.pages.map((page) => normalizePage(page)) : [];
+        const explicitPackagingPages = Array.isArray(state.packagingPages) ? state.packagingPages.map((page) => normalizePage(page)) : [];
+        const incomingPackagingCandidates = Array.isArray(state.packagingCandidates)
+          ? state.packagingCandidates.map((candidate) => normalizePackagingPageCandidate(candidate))
+          : [];
+        const splitContentPages = normalizedAllPages.filter((page) => page.pageKind === "content");
+        const legacyPackagingPages = normalizedAllPages.filter((page) => page.pageKind !== "content");
+        const packagingPages = [...explicitPackagingPages, ...legacyPackagingPages].filter(
+          (page, index, items) => items.findIndex((item) => item.id === page.id) === index,
+        );
+
         const tasks = Array.isArray(state.tasks)
           ? state.tasks.map((task) => ({
               ...task,
               hasGeneratedCoverPage: Boolean(task.hasGeneratedCoverPage),
               hasDerivedTocPage: Boolean(task.hasDerivedTocPage),
               packagingStageStatus: task.packagingStageStatus ?? "pending",
+              preferredExportFormat: task.preferredExportFormat ?? (task.workType === "magazine" ? "pdf" : "pptx"),
             }))
           : [];
+
         const incomingVersions = Array.isArray(state.pageVersions) ? state.pageVersions : [];
         const hasTaskScopedVersions = incomingVersions.every(
           (version) => typeof version?.taskId === "string" && version?.previewsByPageId && typeof version.previewsByPageId === "object",
@@ -788,27 +1397,54 @@ export const useAppStore = create<AppState>()(
           : tasks.flatMap((task) =>
               createInitialPageVersions(
                 task.id,
-                normalizedPages.filter((page) => page.taskId === task.id).sort((a, b) => a.index - b.index),
+                splitContentPages.filter((page) => page.taskId === task.id).sort((a, b) => a.index - b.index),
               ).map((version) => normalizePageVersion(version)),
             );
 
+        const packagingCandidates = incomingPackagingCandidates.length
+          ? incomingPackagingCandidates
+          : rebuildLegacyPackagingCandidates(tasks, packagingPages, splitContentPages, rebuiltVersions);
+
+        const incomingFinalCompositions = Array.isArray(state.finalCompositions)
+          ? state.finalCompositions.map((composition) => normalizeFinalComposition(composition))
+          : [];
+        const incomingFinalCompositionPages = Array.isArray(state.finalCompositionPages)
+          ? state.finalCompositionPages.map((page) => normalizeFinalCompositionPage(page))
+          : [];
+        const incomingHardEditDrafts = Array.isArray(state.hardEditDrafts) ? state.hardEditDrafts : [];
+
+        const rebuiltLegacyState =
+          incomingFinalCompositions.length || incomingFinalCompositionPages.length
+            ? null
+            : rebuildLegacyCompositionState(tasks, splitContentPages, packagingPages, rebuiltVersions, packagingCandidates, incomingHardEditDrafts);
+
         return {
           ...state,
-          pages: normalizedPages,
+          pages: splitContentPages,
+          packagingPages,
+          packagingCandidates,
           pageVersions: rebuiltVersions,
-          hardEditDrafts: Array.isArray(state.hardEditDrafts)
-            ? state.hardEditDrafts.map((draft) => ({
-                ...draft,
-                lastSavedAt: typeof draft.lastSavedAt === "string" ? draft.lastSavedAt : new Date().toISOString(),
-              }))
-            : [],
+          finalCompositions: incomingFinalCompositions.length
+            ? incomingFinalCompositions
+            : rebuiltLegacyState?.compositions ?? [],
+          finalCompositionPages: incomingFinalCompositionPages.length
+            ? incomingFinalCompositionPages
+            : rebuiltLegacyState?.compositionPages ?? [],
+          hardEditDrafts: incomingFinalCompositions.length
+            ? incomingHardEditDrafts.map((draft) => normalizeHardEditDraft(draft as HardEditPageDraft))
+            : rebuiltLegacyState?.migratedDrafts ?? [],
+          assets: Array.isArray(state.assets) ? state.assets.map((asset) => normalizeAsset(asset)) : [],
         } as AppState;
       },
       partialize: (state) => ({
         projects: state.projects,
         tasks: state.tasks,
         pages: state.pages,
+        packagingPages: state.packagingPages,
+        packagingCandidates: state.packagingCandidates,
         pageVersions: state.pageVersions,
+        finalCompositions: state.finalCompositions,
+        finalCompositionPages: state.finalCompositionPages,
         hardEditDrafts: state.hardEditDrafts,
         assets: state.assets,
         activeTaskId: state.activeTaskId,

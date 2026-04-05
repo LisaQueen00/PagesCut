@@ -7,7 +7,7 @@ import { WorkspaceStageRail } from "@/components/workspace/WorkspaceStageRail";
 import { formatTime } from "@/lib/format";
 import { getPageDisplayLabel, sortPagesForFinalOrder } from "@/lib/pageDisplay";
 import { useAppStore } from "@/store/appStore";
-import type { HardEditPageDraft, Page, PageVersion, Task } from "@/types/domain";
+import type { FinalComposition, FinalCompositionPage, HardEditPageDraft, Page, PageVersion, Task } from "@/types/domain";
 
 const stylePool = [
   "现代杂志感，简洁留白",
@@ -17,7 +17,7 @@ const stylePool = [
   "高端刊物风，边界轻、留白大",
 ];
 
-function getGroupedPages(pages: Page[]) {
+function getGroupedPages<T extends Page | FinalCompositionPage>(pages: T[]) {
   const orderedPages = sortPagesForFinalOrder(pages);
   const front = orderedPages.filter((page) => getPageDisplayLabel(page, pages).startsWith("B"));
   const content = orderedPages.filter((page) => getPageDisplayLabel(page, pages).startsWith("P"));
@@ -48,16 +48,24 @@ function getGroupedPages(pages: Page[]) {
   ];
 }
 
-function StageSidebar({
+function StageSidebar<T extends Page | FinalCompositionPage>({
   pages,
   selectedPageId,
   onSelect,
   helperText,
+  sourcePageMap,
+  hardEditDraftMap,
+  readOnlyPageIds,
+  emptyLabels,
 }: {
-  pages: Page[];
+  pages: T[];
   selectedPageId: string;
   onSelect: (pageId: string) => void;
   helperText: string;
+  sourcePageMap?: Map<string, Page>;
+  hardEditDraftMap?: Map<string, HardEditPageDraft>;
+  readOnlyPageIds?: Set<string>;
+  emptyLabels?: Partial<Record<"front" | "content" | "rear", string>>;
 }) {
   const groups = getGroupedPages(pages);
 
@@ -86,19 +94,40 @@ function StageSidebar({
 
             {group.pages.length ? (
               <div className="mt-3 space-y-3">
-                {group.pages.map((page) => (
-                  <OutlinePageCard
-                    key={page.id}
-                    page={page}
-                    pageLabel={getPageDisplayLabel(page, pages)}
-                    isActive={page.id === selectedPageId}
-                    onClick={() => onSelect(page.id)}
-                  />
-                ))}
+                {group.pages.map((page) => {
+                  const sourcePage = "sourcePageId" in page ? sourcePageMap?.get(page.sourcePageId) : page;
+                  const hardEditDraft = "sourcePageId" in page ? hardEditDraftMap?.get(page.id) : undefined;
+                  const isReadOnly = readOnlyPageIds?.has(page.id) ?? false;
+                  const cardPage = {
+                    pageType: page.pageType,
+                    pageKind: page.pageKind,
+                    sourceMode: sourcePage && "sourceMode" in sourcePage ? sourcePage.sourceMode : undefined,
+                    outlineText: sourcePage && "outlineText" in sourcePage ? sourcePage.outlineText : undefined,
+                    isConfirmed: hardEditDraft ? true : sourcePage && "isConfirmed" in sourcePage ? sourcePage.isConfirmed : true,
+                    isSaved: hardEditDraft ? !hardEditDraft.isDirty : sourcePage && "isSaved" in sourcePage ? sourcePage.isSaved : true,
+                    statusLabel: hardEditDraft
+                      ? hardEditDraft.isDirty
+                        ? "未保存"
+                        : "已保存"
+                      : isReadOnly
+                        ? "当前不编辑"
+                        : undefined,
+                    disabled: isReadOnly,
+                  } as const;
+                  return (
+                    <OutlinePageCard
+                      key={page.id}
+                      page={cardPage}
+                      pageLabel={getPageDisplayLabel(page, pages)}
+                      isActive={page.id === selectedPageId}
+                      onClick={() => onSelect(page.id)}
+                    />
+                  );
+                })}
               </div>
             ) : (
               <div className="mt-3 rounded-[16px] border border-dashed border-line/70 bg-[#fbfcfd] px-3 py-4 text-sm leading-6 text-muted">
-                {group.emptyLabel}
+                {emptyLabels?.[group.key as "front" | "content" | "rear"] ?? group.emptyLabel}
               </div>
             )}
           </div>
@@ -129,6 +158,7 @@ function StageOneWorkspace({
   const updateUserProvidedBlock = useAppStore((state) => state.updateUserProvidedBlock);
   const removeUserProvidedBlock = useAppStore((state) => state.removeUserProvidedBlock);
   const enterCandidatesStage = useAppStore((state) => state.enterCandidatesStage);
+  const canAdvance = useAppStore((state) => state.canEnterCandidatesStage(task.id));
 
   function handleSave() {
     savePage(selectedPage.id);
@@ -141,8 +171,6 @@ function StageOneWorkspace({
 
   const pageLabel = getPageDisplayLabel(selectedPage, pages);
   const savedLabel = selectedPage.isSaved ? `${pageLabel} 已保存` : "当前修改尚未保存";
-  const mainEditorTitle = selectedPage.pageKind === "packaging" ? "当前页包装信息 / 引导文案" : "当前页大纲正文预览 / 编辑区";
-  const currentFocusText = selectedPage.pageKind === "packaging" ? "当前聚焦封面包装信息、入口文案与作品识别表达。" : "当前聚焦页级大纲阅读、修改与保存。";
 
   return (
     <div className="grid flex-1 gap-4 xl:grid-cols-[280px_minmax(0,1fr)_340px]">
@@ -190,10 +218,10 @@ function StageOneWorkspace({
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="text-xs uppercase tracking-[0.22em] text-muted">Outline Body</p>
-                    <h4 className="mt-2 text-2xl font-semibold tracking-tight text-ink">{mainEditorTitle}</h4>
+                    <h4 className="mt-2 text-2xl font-semibold tracking-tight text-ink">当前页大纲正文预览 / 编辑区</h4>
                   </div>
                   <span className="rounded-full border border-line/60 bg-white px-3 py-1 text-xs text-muted">
-                    {selectedPage.pageKind === "packaging" ? "包装页" : selectedPage.sourceMode === "user" ? "用户提供" : "系统生成"}
+                    {selectedPage.sourceMode === "user" ? "用户提供" : "系统生成"}
                   </span>
                 </div>
 
@@ -215,7 +243,10 @@ function StageOneWorkspace({
                     <button
                       type="button"
                       onClick={() => enterCandidatesStage(task.id)}
-                      className="rounded-full bg-ink px-5 py-3 text-sm font-medium text-white transition hover:bg-[#202632]"
+                      disabled={!canAdvance}
+                      className={`rounded-full px-5 py-3 text-sm font-medium text-white transition ${
+                        canAdvance ? "bg-ink hover:bg-[#202632]" : "cursor-not-allowed bg-slate-300"
+                      }`}
                     >
                       进入候选页面阶段
                     </button>
@@ -227,13 +258,13 @@ function StageOneWorkspace({
                 <div className="rounded-[22px] border border-line/50 bg-[#f8fafc] p-4">
                   <p className="text-xs uppercase tracking-[0.22em] text-muted">Current Focus</p>
                   <h4 className="mt-2 text-sm font-semibold text-ink">一阶段待确认视图</h4>
-                  <p className="mt-2 text-sm leading-6 text-muted">{currentFocusText}</p>
+                  <p className="mt-2 text-sm leading-6 text-muted">当前聚焦页级大纲阅读、修改与保存。</p>
                 </div>
                 <div className="rounded-[22px] border border-line/50 bg-[#f8fafc] p-4">
                   <p className="text-xs uppercase tracking-[0.22em] text-muted">Next Step</p>
                   <div className="mt-3 space-y-2 text-sm text-muted">
                     <p>页类型：{selectedPage.pageType}</p>
-                    <p>页面类别：{selectedPage.pageKind === "packaging" ? "包装 / 结构页" : "内容页"}</p>
+                    <p>页面类别：内容页</p>
                     <p>表达形式：{selectedPage.expressionMode}</p>
                     <p>风格描述：{selectedPage.styleText}</p>
                   </div>
@@ -283,6 +314,7 @@ function StageTwoWorkspace({
   const approveTaskVersion = useAppStore((state) => state.approveTaskVersion);
   const regenerateTaskVersion = useAppStore((state) => state.regenerateTaskVersion);
   const enterPackagingStage = useAppStore((state) => state.enterPackagingStage);
+  const canAdvance = useAppStore((state) => state.canEnterPackagingStage(task.id));
 
   const currentPageVersions = useMemo(
     () => pageVersions.slice().sort((a, b) => (a.createdAt > b.createdAt ? 1 : -1)),
@@ -295,7 +327,7 @@ function StageTwoWorkspace({
   );
   const selectedPreviewHtml = selectedVersion?.previewsByPageId[selectedPage.id] ?? "";
   const pageLabel = getPageDisplayLabel(selectedPage, pages);
-  const contentPages = pages.filter((page) => page.pageKind === "content");
+  const contentPages = pages;
 
   if (!selectedVersion) {
     return null;
@@ -325,6 +357,7 @@ function StageTwoWorkspace({
         onApproveVersion={(versionId) => approveTaskVersion(task.id, versionId)}
         onRegenerate={(promptNote) => regenerateTaskVersion(task.id, selectedPage.id, promptNote)}
         onEnterPackaging={() => enterPackagingStage(task.id)}
+        canEnterPackaging={canAdvance}
       />
     </div>
   );
@@ -333,66 +366,198 @@ function StageTwoWorkspace({
 function PackagingWorkspace({
   task,
   selectedPage,
-  pages,
+  packagingPages,
+  contentPages,
   pageVersions,
 }: {
   task: Task;
   selectedPage: Page;
-  pages: Page[];
+  packagingPages: Page[];
+  contentPages: Page[];
   pageVersions: PageVersion[];
 }) {
   const setTaskSelectedPage = useAppStore((state) => state.setTaskSelectedPage);
+  const packagingCandidates = useAppStore((state) => state.packagingCandidates);
   const regeneratePackagingPage = useAppStore((state) => state.regeneratePackagingPage);
+  const selectPackagingCandidate = useAppStore((state) => state.selectPackagingCandidate);
+  const approvePackagingCandidate = useAppStore((state) => state.approvePackagingCandidate);
   const enterHardEditStage = useAppStore((state) => state.enterHardEditStage);
-  const packagingPages = useMemo(
-    () => pages.filter((page) => page.pageKind !== "content").sort((a, b) => a.index - b.index),
-    [pages],
+  const canAdvance = useAppStore((state) => state.canEnterHardEditStage(task.id));
+  const sidebarPages = useMemo(
+    () => [...packagingPages, ...contentPages].sort((a, b) => a.index - b.index),
+    [contentPages, packagingPages],
   );
+  const readOnlyPageIds = useMemo(() => new Set(contentPages.map((page) => page.id)), [contentPages]);
   const selectedVersion = useMemo(
     () => pageVersions.find((version) => version.isSelected) ?? pageVersions[pageVersions.length - 1],
     [pageVersions],
   );
-  const selectedPreviewHtml = selectedVersion?.previewsByPageId[selectedPage.id] ?? "";
-  const pageLabel = getPageDisplayLabel(selectedPage, pages);
+  const currentPackagingCandidates = useMemo(
+    () =>
+      packagingCandidates
+        .filter((candidate) => candidate.taskId === task.id && candidate.pageId === selectedPage.id)
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
+    [packagingCandidates, selectedPage.id, task.id],
+  );
+  const selectedPackagingCandidate = useMemo(
+    () => currentPackagingCandidates.find((candidate) => candidate.isSelected) ?? currentPackagingCandidates[0],
+    [currentPackagingCandidates],
+  );
+  const approvedPackagingCandidate = useMemo(
+    () => currentPackagingCandidates.find((candidate) => candidate.isApproved),
+    [currentPackagingCandidates],
+  );
+  const approvedPackagingCount = useMemo(
+    () =>
+      packagingPages.filter((page) =>
+        packagingCandidates.some((candidate) => candidate.taskId === task.id && candidate.pageId === page.id && candidate.isApproved),
+      ).length,
+    [packagingCandidates, packagingPages, task.id],
+  );
+  const selectedPreviewHtml = selectedPackagingCandidate?.previewHtml ?? "";
+  const pageLabel = getPageDisplayLabel(selectedPage, packagingPages);
+  const contentTitles = useMemo(
+    () => contentPages.slice().sort((a, b) => a.index - b.index).map((page, index) => `${index + 1}. ${page.pageType}`),
+    [contentPages],
+  );
+  const approvedContentVersion = useMemo(
+    () => pageVersions.find((version) => version.isApproved),
+    [pageVersions],
+  );
 
-  if (!selectedVersion || !packagingPages.length) {
+  if (!selectedVersion || !packagingPages.length || !selectedPackagingCandidate) {
     return null;
   }
 
   return (
     <div className="grid flex-1 gap-4 xl:grid-cols-[280px_minmax(0,1fr)_340px]">
       <StageSidebar
-        pages={packagingPages}
+        pages={sidebarPages}
         selectedPageId={selectedPage.id}
         onSelect={(pageId) => setTaskSelectedPage(task.id, pageId)}
-        helperText="当前阶段只处理包装页与结构页。封面页和目录页都基于已确认的内容方案与内容结构生成。"
+        helperText="内容页方案已经确认。当前阶段只处理前置包装页候选，封面页与目录页都建立在已确认内容结构之上。"
+        readOnlyPageIds={readOnlyPageIds}
+        emptyLabels={{
+          content: contentPages.length ? "内容页已确认并已纳入当前方案，本阶段仅处理包装页。" : "当前还没有内容页。",
+          rear: "后置包装页当前仍为预留位，暂未配置，后续阶段再补充。",
+        }}
       />
 
-      <CandidatePreview version={selectedVersion} previewHtml={selectedPreviewHtml} />
+      <CandidatePreview
+        version={selectedVersion}
+        previewHtml={selectedPreviewHtml}
+        stageLabel="Stage 2.5"
+        title={selectedPage.pageRole === "cover" ? "封面页候选预览" : "目录页候选预览"}
+        footerLabel={`${selectedPackagingCandidate.candidateLabel} · 基于 ${approvedContentVersion?.versionLabel ?? selectedVersion.versionLabel} 的包装页结果`}
+        statusLabel={approvedPackagingCandidate?.id === selectedPackagingCandidate.id ? "当前已选包装结果" : "包装页候选预览中"}
+      />
 
       <aside className="rounded-[24px] border border-line/70 bg-[#f8fafc] p-4">
         <p className="text-xs uppercase tracking-[0.22em] text-muted">Stage 2.5</p>
         <h2 className="mt-1 text-lg font-semibold text-ink">包装页生成与筛选</h2>
         <div className="mt-5 space-y-4">
           <section className="rounded-[20px] border border-line/70 bg-white p-4">
+            <p className="text-xs uppercase tracking-[0.22em] text-muted">Stage Context</p>
+            <h3 className="mt-2 text-base font-semibold text-ink">内容方案已确认，当前生成包装页</h3>
+            <div className="mt-4 space-y-3 text-sm text-muted">
+              <p>已确认内容方案：{approvedContentVersion?.versionLabel ?? selectedVersion.versionLabel}</p>
+              <p>已确认内容页数量：{contentPages.length}</p>
+              <p>当前阶段目标：基于已确认内容结构，补齐封面页与目录页，并分别选定包装页结果。</p>
+              <p>当前完成度：{approvedPackagingCount} / {packagingPages.length} 个前置包装页已选定</p>
+            </div>
+          </section>
+
+          <section className="rounded-[20px] border border-line/70 bg-white p-4">
             <p className="text-xs uppercase tracking-[0.22em] text-muted">Current Packaging Page</p>
             <h3 className="mt-2 text-base font-semibold text-ink">
               {pageLabel} · {selectedPage.pageType}
             </h3>
             <div className="mt-4 space-y-3 text-sm text-muted">
-              <p>当前方案：{selectedVersion.versionLabel}</p>
+              <p>基于内容方案：{approvedContentVersion?.versionLabel ?? selectedVersion.versionLabel}</p>
               <p>包装页类型：{selectedPage.pageRole === "cover" ? "封面页" : "目录页"}</p>
-              <p>{selectedPage.pageRole === "cover" ? "基于标题、副标题、期次、品牌和主视觉信息生成。" : "基于当前内容页顺序、标题和结构生成目录。"} </p>
+              <p>{selectedPage.pageRole === "cover" ? "封面页候选围绕刊名、副标题、期次、品牌与主视觉信息生成。" : "目录页候选直接依赖已确认内容页的顺序与标题，不是独立随意写出的一页。"} </p>
+              <p>当前预览候选：{selectedPackagingCandidate.candidateLabel}</p>
+              <p>{approvedPackagingCandidate ? `已选定结果：${approvedPackagingCandidate.candidateLabel}` : "当前页尚未选定最终包装结果"}</p>
             </div>
           </section>
+
+          <section className="rounded-[20px] border border-line/70 bg-white p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.22em] text-muted">Packaging Candidates</p>
+                <h3 className="mt-2 text-base font-semibold text-ink">{selectedPage.pageRole === "cover" ? "封面页候选" : "目录页候选"}</h3>
+              </div>
+              <span className="rounded-full bg-[#f3f5f8] px-3 py-1 text-xs text-muted">{currentPackagingCandidates.length} 个候选</span>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {currentPackagingCandidates.map((candidate) => {
+                const isActive = selectedPackagingCandidate.id === candidate.id;
+                return (
+                  <div
+                    key={candidate.id}
+                    className={`rounded-[18px] border p-4 ${isActive ? "border-ink bg-[#fbfcff]" : "border-line/70 bg-white"}`}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-ink">{candidate.candidateLabel}</p>
+                        <p className="mt-1 text-xs text-muted">{formatTime(candidate.createdAt)}</p>
+                      </div>
+                      <div className="flex gap-2">
+                        {candidate.isApproved ? <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] text-emerald-700">已选定</span> : null}
+                        {isActive ? <span className="rounded-full bg-[#eef2f7] px-2.5 py-1 text-[11px] text-muted">当前预览</span> : null}
+                      </div>
+                    </div>
+                    <p className="mt-3 text-sm leading-6 text-muted">{candidate.summary}</p>
+                    <p className="mt-2 text-xs text-muted">{candidate.promptNote}</p>
+                    <div className="mt-4 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => selectPackagingCandidate(task.id, selectedPage.id, candidate.id)}
+                        className="rounded-full border border-line bg-white px-4 py-2 text-xs font-medium text-ink transition hover:border-ink/20"
+                      >
+                        预览此候选
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => approvePackagingCandidate(task.id, selectedPage.id, candidate.id)}
+                        className="rounded-full border border-line bg-white px-4 py-2 text-xs font-medium text-ink transition hover:border-ink/20"
+                      >
+                        选定为当前结果
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          {selectedPage.pageRole === "toc" ? (
+            <section className="rounded-[20px] border border-line/70 bg-white p-4">
+              <p className="text-xs uppercase tracking-[0.22em] text-muted">Structure Source</p>
+              <h3 className="mt-2 text-base font-semibold text-ink">目录页来源于已确认内容结构</h3>
+              <p className="mt-2 text-sm leading-6 text-muted">目录页候选直接根据当前内容页的顺序与标题生成。下面这组内容结构就是它的来源，不是独立随意编写。</p>
+              <div className="mt-4 rounded-[18px] bg-[#f8fafc] p-4 text-sm leading-7 text-ink">
+                {contentTitles.map((title) => (
+                  <p key={title}>{title}</p>
+                ))}
+              </div>
+            </section>
+          ) : (
+            <section className="rounded-[20px] border border-line/70 bg-white p-4">
+              <p className="text-xs uppercase tracking-[0.22em] text-muted">Content Dependency</p>
+              <h3 className="mt-2 text-base font-semibold text-ink">封面页建立在已确认内容方案之上</h3>
+              <p className="mt-2 text-sm leading-6 text-muted">封面页不是独立漂浮的一页。它继承已确认内容方案的风格方向、刊名信息与阅读定位，用来为整期内容建立入口与识别感。</p>
+            </section>
+          )}
 
           <section className="rounded-[20px] border border-line/70 bg-white p-4">
             <p className="text-xs uppercase tracking-[0.22em] text-muted">Light Regenerate</p>
             <h3 className="mt-2 text-base font-semibold text-ink">轻量再生成</h3>
             <p className="mt-2 text-sm leading-6 text-muted">
               {selectedPage.pageRole === "cover"
-                ? "重新生成封面页会调整标题呈现、主视觉说明与信息层级。"
-                : "重新生成目录页会调整目录组织方式和目录展示样式。"}
+                ? "再生成会新增一个新的封面页候选，调整标题呈现、主视觉说明与信息层级。"
+                : "再生成会新增一个新的目录页候选，继续基于当前内容结构调整目录组织方式与展示样式。"}
             </p>
             <button
               type="button"
@@ -406,11 +571,14 @@ function PackagingWorkspace({
           <section className="rounded-[20px] border border-line/70 bg-white p-4">
             <p className="text-xs uppercase tracking-[0.22em] text-muted">Next Step</p>
             <h3 className="mt-2 text-base font-semibold text-ink">进入页面硬编辑</h3>
-            <p className="mt-2 text-sm leading-6 text-muted">下一步将把封面页、目录页以及所有内容页一并纳入最终硬编辑集合。</p>
+            <p className="mt-2 text-sm leading-6 text-muted">下一步会基于已确认内容方案，以及封面页 / 目录页各自已选定的包装结果，落地 Final Composition，再进入作品页硬编辑。</p>
             <button
               type="button"
               onClick={() => enterHardEditStage(task.id)}
-              className="mt-4 w-full rounded-full bg-ink px-5 py-3 text-sm font-medium text-white transition hover:bg-[#202632]"
+              disabled={!canAdvance}
+              className={`mt-4 w-full rounded-full px-5 py-3 text-sm font-medium text-white transition ${
+                canAdvance ? "bg-ink hover:bg-[#202632]" : "cursor-not-allowed bg-slate-300"
+              }`}
             >
               所有页面一起进入硬编辑
             </button>
@@ -426,7 +594,7 @@ function HardEditPagePreview({
   pageLabel,
   draft,
 }: {
-  page: Page;
+  page: FinalCompositionPage;
   pageLabel: string;
   draft: HardEditPageDraft;
 }) {
@@ -503,29 +671,44 @@ function HardEditPagePreview({
 function HardEditWorkspace({
   task,
   selectedPage,
-  pages,
+  compositionPages,
+  sourcePageMap,
 }: {
   task: Task;
-  selectedPage: Page;
-  pages: Page[];
+  selectedPage: FinalCompositionPage;
+  compositionPages: FinalCompositionPage[];
+  sourcePageMap: Map<string, Page>;
 }) {
   const setTaskSelectedPage = useAppStore((state) => state.setTaskSelectedPage);
   const hardEditDrafts = useAppStore((state) => state.hardEditDrafts);
   const updateHardEditDraft = useAppStore((state) => state.updateHardEditDraft);
   const saveHardEditDraft = useAppStore((state) => state.saveHardEditDraft);
-  const orderedPages = useMemo(() => sortPagesForFinalOrder(pages), [pages]);
+  const enterExportStage = useAppStore((state) => state.enterExportStage);
+  const canEnterExport = useAppStore((state) => state.canEnterExportStage(task.id));
+  const orderedPages = useMemo(() => sortPagesForFinalOrder(compositionPages), [compositionPages]);
+  const hardEditDraftMap = useMemo(
+    () =>
+      new Map(
+        hardEditDrafts
+          .filter((item) => item.taskId === task.id)
+          .map((item) => [item.compositionPageId, item] as const),
+      ),
+    [hardEditDrafts, task.id],
+  );
   const draft = useMemo(
-    () => hardEditDrafts.find((item) => item.taskId === task.id && item.pageId === selectedPage.id),
+    () => hardEditDrafts.find((item) => item.taskId === task.id && item.compositionPageId === selectedPage.id),
     [hardEditDrafts, selectedPage.id, task.id],
   );
-  const pageLabel = getPageDisplayLabel(selectedPage, pages);
+  const pageLabel = getPageDisplayLabel(selectedPage, compositionPages);
 
   if (!draft) {
     return null;
   }
 
+  const currentDraft = draft;
+
   function handleSelectPage(pageId: string) {
-    if (draft?.isDirty) {
+    if (currentDraft.isDirty) {
       const shouldLeave = window.confirm("当前页面有未保存修改，是否继续切换页面？未保存内容仍会保留在本地，但建议先保存。");
       if (!shouldLeave) {
         return;
@@ -541,7 +724,9 @@ function HardEditWorkspace({
         pages={orderedPages}
         selectedPageId={selectedPage.id}
         onSelect={handleSelectPage}
-        helperText="当前阶段编辑的是已确认页面产物本身。左侧切换的是最终作品页，不再是大纲定义或参数设置。"
+        helperText="当前阶段编辑的是 Final Composition 中的已确认作品页。左侧切换的是最终编排页实例，不再是大纲定义页。"
+        sourcePageMap={sourcePageMap}
+        hardEditDraftMap={hardEditDraftMap}
       />
 
       <HardEditPagePreview page={selectedPage} pageLabel={pageLabel} draft={draft} />
@@ -558,12 +743,23 @@ function HardEditWorkspace({
               </span>
             </div>
             <p className="mt-3 text-sm leading-6 text-muted">最近保存时间：{formatTime(draft.lastSavedAt)}</p>
+            <p className="mt-2 text-xs text-muted">来源编排页：{pageLabel}，来源版本：{draft.sourceVersionId}</p>
             <button
               type="button"
               onClick={() => saveHardEditDraft(draft.id)}
               className="mt-4 w-full rounded-full bg-ink px-5 py-3 text-sm font-medium text-white transition hover:bg-[#202632]"
             >
               保存当前页面
+            </button>
+            <button
+              type="button"
+              onClick={() => enterExportStage(task.id)}
+              disabled={!canEnterExport}
+              className={`mt-3 w-full rounded-full px-5 py-3 text-sm font-medium text-white transition ${
+                canEnterExport ? "bg-[#2f4358] hover:bg-[#243647]" : "cursor-not-allowed bg-slate-300"
+              }`}
+            >
+              进入 Stage 3 / 导出沉淀
             </button>
           </section>
 
@@ -626,26 +822,209 @@ function HardEditWorkspace({
   );
 }
 
+function ExportWorkspace({
+  task,
+  finalComposition,
+  finalCompositionPages,
+}: {
+  task: Task;
+  finalComposition: FinalComposition;
+  finalCompositionPages: FinalCompositionPage[];
+}) {
+  const setTaskPreferredExportFormat = useAppStore((state) => state.setTaskPreferredExportFormat);
+  const createAssetFromFinalComposition = useAppStore((state) => state.createAssetFromFinalComposition);
+  const canCreateAsset = useAppStore((state) => state.canEnterExportStage(task.id));
+  const assets = useAppStore((state) => state.assets);
+
+  const latestAsset = useMemo(
+    () => assets.find((asset) => asset.compositionId === finalComposition.id),
+    [assets, finalComposition.id],
+  );
+  const pageTypes = useMemo(() => finalCompositionPages.map((page) => page.pageType), [finalCompositionPages]);
+  const isPdfReady = latestAsset?.status === "completed" && latestAsset.fileMimeType === "application/pdf" && latestAsset.downloadUrl.startsWith("data:application/pdf");
+  const isProcessing = latestAsset?.status === "preparing" || latestAsset?.status === "processing";
+  return (
+    <div className="grid flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+      <section className="soft-grid relative overflow-hidden rounded-[28px] border border-line/70 bg-white p-6 shadow-panel">
+        <div className="absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-[#f8fafc] to-transparent" />
+        <div className="relative">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.22em] text-muted">Stage 3</p>
+              <h2 className="mt-2 text-3xl font-semibold text-ink">导出准备与产物沉淀</h2>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-muted">当前这一步会把已完成硬编辑的 Final Composition 转成真实 PDF 文件，并把文件引用写入 Assets。</p>
+            </div>
+            <div className="rounded-[20px] border border-line/70 bg-[#f8fafc] px-4 py-3 text-sm text-muted">
+              Composition 更新于 {formatTime(finalComposition.updatedAt)}
+            </div>
+          </div>
+
+          <div className="mt-7 grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+            <div className="rounded-[24px] border border-line/70 bg-[#fcfdff] p-5 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.22em] text-muted">Export Summary</p>
+                  <h3 className="mt-2 text-2xl font-semibold tracking-tight text-ink">{task.title}</h3>
+                </div>
+                <span className="rounded-full bg-ink px-4 py-2 text-sm text-white">{task.preferredExportFormat.toUpperCase()}</span>
+              </div>
+
+              <div className="mt-5 grid gap-3 md:grid-cols-3">
+                <div className="rounded-[18px] border border-line/70 bg-white p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-muted">Source</p>
+                  <p className="mt-2 text-sm font-semibold text-ink">{finalComposition.id}</p>
+                  <p className="mt-2 text-xs text-muted">来源版本：{finalComposition.approvedContentVersionId}</p>
+                </div>
+                <div className="rounded-[18px] border border-line/70 bg-white p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-muted">Pages</p>
+                  <p className="mt-2 text-sm font-semibold text-ink">{finalCompositionPages.length} 页</p>
+                  <p className="mt-2 text-xs text-muted">前置包装 + 内容页 + 最终编排顺序</p>
+                </div>
+                <div className="rounded-[18px] border border-line/70 bg-white p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-muted">Packaging</p>
+                  <p className="mt-2 text-sm font-semibold text-ink">{finalComposition.approvedPackagingCandidateIds.length} 个已选包装结果</p>
+                  <p className="mt-2 text-xs text-muted">封面页 / 目录页已固化进当前 composition</p>
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-[22px] border border-line/70 bg-white p-5">
+                <p className="text-xs uppercase tracking-[0.22em] text-muted">Page Types</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {pageTypes.map((pageType, index) => (
+                    <span key={`${pageType}-${index}`} className="rounded-full bg-[#f3f5f8] px-3 py-1.5 text-xs text-muted">
+                      {pageType}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-[22px] border border-line/70 bg-white p-5">
+                <p className="text-xs uppercase tracking-[0.22em] text-muted">Export Format</p>
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setTaskPreferredExportFormat(task.id, "pdf")}
+                    className={`rounded-[18px] border px-4 py-4 text-left ${task.preferredExportFormat === "pdf" ? "border-ink bg-[#fbfcff]" : "border-line/70 bg-white"}`}
+                  >
+                    <p className="text-sm font-semibold text-ink">PDF</p>
+                    <p className="mt-2 text-xs text-muted">本轮已接通真实导出，可生成并下载 PDF 文件。</p>
+                  </button>
+                  <button
+                    type="button"
+                    disabled
+                    className="cursor-not-allowed rounded-[18px] border border-line/70 bg-slate-50 px-4 py-4 text-left opacity-75"
+                  >
+                    <p className="text-sm font-semibold text-ink">PPTX</p>
+                    <p className="mt-2 text-xs text-muted">这轮暂不接通真实导出，后续再补。</p>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <aside className="space-y-4">
+              <section className="rounded-[24px] border border-line/70 bg-[#f8fafc] p-4">
+                <p className="text-xs uppercase tracking-[0.22em] text-muted">PDF Export</p>
+                <h3 className="mt-2 text-lg font-semibold text-ink">生成真实 PDF 文件</h3>
+                <p className="mt-3 text-sm leading-6 text-muted">当前会直接以 Final Composition 为来源生成真实 PDF，并把文件引用写入 Asset，随后可在 Assets 中下载。</p>
+                <button
+                  type="button"
+                  onClick={() => void createAssetFromFinalComposition(task.id)}
+                  disabled={!canCreateAsset || isProcessing}
+                  className={`mt-4 w-full rounded-full px-5 py-3 text-sm font-medium text-white transition ${
+                    canCreateAsset && !isProcessing ? "bg-ink hover:bg-[#202632]" : "cursor-not-allowed bg-slate-300"
+                  }`}
+                >
+                  {isProcessing ? "PDF 导出中..." : isPdfReady ? "重新生成 PDF" : "开始导出 PDF"}
+                </button>
+              </section>
+
+              <section className="rounded-[24px] border border-line/70 bg-[#f8fafc] p-4">
+                <p className="text-xs uppercase tracking-[0.22em] text-muted">Current Result</p>
+                <h3 className="mt-2 text-lg font-semibold text-ink">当前 Assets 状态</h3>
+                {latestAsset ? (
+                  <div className="mt-4 rounded-[20px] border border-line/70 bg-white p-4">
+                    <p className="text-sm font-semibold text-ink">{latestAsset.title}</p>
+                    <p className="mt-2 text-sm text-muted">{latestAsset.exportFormat.toUpperCase()} · {latestAsset.pageCount} 页 · {formatTime(latestAsset.createdAt)}</p>
+                    <p className="mt-2 text-sm leading-6 text-muted">
+                      {latestAsset.status === "completed"
+                        ? `导出成功，已生成可下载 PDF。${latestAsset.readyAt ? `完成于 ${formatTime(latestAsset.readyAt)}。` : ""}`
+                        : latestAsset.status === "failed"
+                          ? `导出失败。${latestAsset.errorMessage || "请稍后重试。"}`
+                          : "正在生成 PDF 文件，请稍候。"}
+                    </p>
+                    {isPdfReady ? (
+                      <a
+                        href={latestAsset.downloadUrl}
+                        download={latestAsset.fileName}
+                        className="mt-4 inline-flex rounded-full border border-line bg-white px-4 py-2 text-sm font-medium text-ink transition hover:border-ink/20"
+                      >
+                        下载 PDF
+                      </a>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="mt-4 rounded-[20px] border border-dashed border-line/70 bg-white p-4 text-sm leading-6 text-muted">
+                    当前 Final Composition 还没有导出文件。开始导出后，将先进入导出状态，再在 Assets 中成为可下载的 PDF 作品。
+                  </div>
+                )}
+              </section>
+            </aside>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export function WorkspaceShell({
   task,
   pages,
+  packagingPages,
   pageVersions,
+  finalComposition,
+  finalCompositionPages,
 }: {
   task: Task;
   pages: Page[];
+  packagingPages: Page[];
   pageVersions: PageVersion[];
+  finalComposition: FinalComposition | undefined;
+  finalCompositionPages: FinalCompositionPage[];
 }) {
   const [drawerOpen, setDrawerOpen] = useState(true);
-  const selectedPage = useMemo(() => {
+  const sourcePageMap = useMemo(() => new Map([...pages, ...packagingPages].map((page) => [page.id, page])), [pages, packagingPages]);
+
+  const selectedContentPage = useMemo(() => {
     const current = pages.find((page) => page.id === task.selectedPageId);
-    if (task.currentStage === "packaging") {
-      return current?.pageKind !== "content" ? current : pages.find((page) => page.pageKind !== "content") ?? pages[0];
-    }
-
     return current ?? pages[0];
-  }, [pages, task.currentStage, task.selectedPageId]);
+  }, [pages, task.selectedPageId]);
 
-  if (!pages.length || !selectedPage) {
+  const selectedPackagingPage = useMemo(() => {
+    const current = packagingPages.find((page) => page.id === task.selectedPageId);
+    return current ?? packagingPages[0];
+  }, [packagingPages, task.selectedPageId]);
+
+  const selectedCompositionPage = useMemo(() => {
+    const current = finalCompositionPages.find((page) => page.id === task.selectedPageId);
+    return current ?? finalCompositionPages[0];
+  }, [finalCompositionPages, task.selectedPageId]);
+
+  if (task.currentStage === "hard-edit") {
+    if (!finalComposition || !finalCompositionPages.length || !selectedCompositionPage) {
+      return (
+        <div className="flex h-full flex-col gap-4">
+          <WorkspaceStageRail task={task} />
+          <section className="flex min-h-[520px] items-center justify-center rounded-[28px] border border-line/70 bg-white shadow-panel">
+            <div className="max-w-md text-center">
+              <p className="text-xs uppercase tracking-[0.24em] text-muted">Final Composition</p>
+              <h2 className="mt-3 text-2xl font-semibold text-ink">正在准备最终编排稿</h2>
+              <p className="mt-3 text-sm leading-7 text-muted">当前任务已进入硬编辑阶段，正在从满意内容方案和包装页生成最终编排稿。</p>
+            </div>
+          </section>
+        </div>
+      );
+    }
+  } else if (!selectedContentPage && task.currentStage !== "packaging") {
     return (
       <div className="flex h-full flex-col gap-4">
         <WorkspaceStageRail task={task} />
@@ -664,22 +1043,39 @@ export function WorkspaceShell({
     <div className="flex h-full flex-col gap-4">
       <WorkspaceStageRail task={task} />
 
-      {task.currentStage === "candidates" ? (
+      {task.currentStage === "candidates" && selectedContentPage ? (
         <StageTwoWorkspace
           task={task}
-          selectedPage={selectedPage}
+          selectedPage={selectedContentPage}
           pages={pages}
           pageVersions={pageVersions}
           drawerOpen={drawerOpen}
           setDrawerOpen={setDrawerOpen}
         />
-      ) : task.currentStage === "packaging" ? (
-        <PackagingWorkspace task={task} selectedPage={selectedPage} pages={pages} pageVersions={pageVersions} />
-      ) : task.currentStage === "hard-edit" ? (
-        <HardEditWorkspace task={task} selectedPage={selectedPage} pages={pages} />
-      ) : (
-        <StageOneWorkspace task={task} selectedPage={selectedPage} pages={pages} drawerOpen={drawerOpen} setDrawerOpen={setDrawerOpen} />
-      )}
+      ) : task.currentStage === "packaging" && selectedPackagingPage ? (
+        <PackagingWorkspace
+          task={task}
+          selectedPage={selectedPackagingPage}
+          packagingPages={packagingPages}
+          contentPages={pages}
+          pageVersions={pageVersions}
+        />
+      ) : task.currentStage === "hard-edit" && selectedCompositionPage ? (
+        <HardEditWorkspace
+          task={task}
+          selectedPage={selectedCompositionPage}
+          compositionPages={finalCompositionPages}
+          sourcePageMap={sourcePageMap}
+        />
+      ) : task.currentStage === "export" && finalComposition ? (
+        <ExportWorkspace
+          task={task}
+          finalComposition={finalComposition}
+          finalCompositionPages={finalCompositionPages}
+        />
+      ) : selectedContentPage ? (
+        <StageOneWorkspace task={task} selectedPage={selectedContentPage} pages={pages} drawerOpen={drawerOpen} setDrawerOpen={setDrawerOpen} />
+      ) : null}
     </div>
   );
 }

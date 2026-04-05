@@ -1,4 +1,13 @@
-import type { Page } from "@/types/domain";
+type OutlinePageCardItem = {
+  pageType: string;
+  pageKind: "packaging" | "content";
+  sourceMode?: "user" | "system";
+  outlineText?: string;
+  isConfirmed?: boolean;
+  isSaved?: boolean;
+  statusLabel?: string;
+  disabled?: boolean;
+};
 
 function summarize(text: string) {
   return text.length > 16 ? `${text.slice(0, 16)}...` : text;
@@ -10,7 +19,7 @@ export function OutlinePageCard({
   isActive,
   onClick,
 }: {
-  page: Page;
+  page: OutlinePageCardItem;
   pageLabel: string;
   isActive: boolean;
   onClick: () => void;
@@ -19,10 +28,13 @@ export function OutlinePageCard({
     <button
       type="button"
       onClick={onClick}
+      disabled={page.disabled}
       className={`w-full rounded-[20px] border p-4 text-left transition ${
         isActive
           ? "border-ink bg-white shadow-panel"
-          : "border-line/70 bg-white/90 shadow-sm hover:border-ink/20 hover:bg-white"
+          : page.disabled
+            ? "cursor-default border-line/60 bg-white/70 opacity-80"
+            : "border-line/70 bg-white/90 shadow-sm hover:border-ink/20 hover:bg-white"
       }`}
     >
       <div className="flex items-start justify-between gap-3">
@@ -37,7 +49,7 @@ export function OutlinePageCard({
       </div>
 
       <p className="mt-3 text-sm leading-6 text-muted">
-        {page.pageKind === "packaging" ? "包装页，不纳入内容大纲覆盖。" : summarize(page.outlineText)}
+        {page.pageKind === "packaging" ? "包装页，不纳入内容大纲覆盖。" : summarize(page.outlineText ?? "")}
       </p>
 
       <div className="mt-4 flex flex-wrap gap-2">
@@ -45,18 +57,14 @@ export function OutlinePageCard({
           {page.pageKind === "packaging" ? "包装页" : "内容页"}
         </span>
         <span
-          className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${
-            page.isConfirmed ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"
-          }`}
+          className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${page.isConfirmed ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}
         >
           {page.isConfirmed ? "已确认" : "待确认"}
         </span>
         <span
-          className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${
-            page.isSaved ? "bg-[#eef2f7] text-ink" : "bg-[#f7f8fa] text-muted"
-          }`}
+          className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${page.isSaved ? "bg-[#eef2f7] text-ink" : "bg-[#f7f8fa] text-muted"}`}
         >
-          {page.isSaved ? "已保存" : "未保存"}
+          {page.statusLabel ?? (page.isSaved ? "已保存" : "未保存")}
         </span>
       </div>
     </button>
