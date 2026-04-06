@@ -5,6 +5,7 @@ import { isValidTaskVersion } from "@/lib/versionValidation";
 import { canEnterCandidatesStage, canEnterExportStage, canEnterHardEditStage, canEnterPackagingStage } from "@/lib/workflowGuards";
 import {
   buildMockPreviewHtml,
+  buildMockPageModel,
   buildPackagingPreviewHtml,
   createDeferredPackagingPages,
   createInitialPageVersions,
@@ -224,6 +225,8 @@ function normalizePageVersion(version: PageVersion): PageVersion {
     derivedFromVersionId: version.derivedFromVersionId ?? null,
     previewsByPageId:
       version.previewsByPageId && typeof version.previewsByPageId === "object" ? version.previewsByPageId : {},
+    pageModelsByPageId:
+      version.pageModelsByPageId && typeof version.pageModelsByPageId === "object" ? version.pageModelsByPageId : {},
   };
 }
 
@@ -359,6 +362,11 @@ function createMockGeneratedVersion(
       ),
     ]),
   );
+  const pageModelsByPageId = Object.fromEntries(
+    pages
+      .map((page, index) => [page.id, buildMockPageModel(page, versionLabel, variant + index, family)] as const)
+      .filter((entry): entry is readonly [string, NonNullable<ReturnType<typeof buildMockPageModel>>] => Boolean(entry[1])),
+  );
 
   return {
     id: createVersionId(),
@@ -368,6 +376,7 @@ function createMockGeneratedVersion(
     variantSummary,
     derivedFromVersionId: selectedVersion?.id ?? null,
     previewsByPageId,
+    pageModelsByPageId,
     isSelected: true,
     isApproved: false,
     createdAt: new Date().toISOString(),

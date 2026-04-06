@@ -114,10 +114,21 @@ function StageSidebar<T extends Page | FinalCompositionPage>({
                         : undefined,
                     disabled: isReadOnly,
                   } as const;
+                  const debugPageType = sourcePage && "pageRole" in sourcePage
+                    ? sourcePage.pageRole === "case-study"
+                      ? "case"
+                      : sourcePage.pageRole === "feature" && sourcePage.pageType.includes("数据")
+                        ? "data"
+                        : sourcePage.pageRole === "summary"
+                          ? "summary"
+                          : sourcePage.pageRole === "overview"
+                            ? "overview"
+                            : undefined
+                    : undefined;
                   return (
                     <OutlinePageCard
                       key={page.id}
-                      page={cardPage}
+                      page={{ ...cardPage, debugPageType }}
                       pageLabel={getPageDisplayLabel(page, pages)}
                       isActive={page.id === selectedPageId}
                       onClick={() => onSelect(page.id)}
@@ -326,6 +337,7 @@ function StageTwoWorkspace({
     [currentPageVersions],
   );
   const selectedPreviewHtml = selectedVersion?.previewsByPageId[selectedPage.id] ?? "";
+  const selectedPageModel = selectedVersion?.pageModelsByPageId?.[selectedPage.id];
   const pageLabel = getPageDisplayLabel(selectedPage, pages);
   const contentPages = pages;
 
@@ -342,7 +354,7 @@ function StageTwoWorkspace({
         helperText="左侧继续切换页卡；当前整期方案保持不变，不同页面只展示该方案下的页级适配预览。"
       />
 
-      <CandidatePreview version={selectedVersion} previewHtml={selectedPreviewHtml} />
+      <CandidatePreview version={selectedVersion} pageModel={selectedPageModel} previewHtml={selectedPreviewHtml} />
 
       <StageTwoDrawer
         open={drawerOpen}

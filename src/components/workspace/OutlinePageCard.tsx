@@ -1,5 +1,6 @@
 type OutlinePageCardItem = {
   pageType: string;
+  debugPageType?: string;
   pageKind: "packaging" | "content";
   sourceMode?: "user" | "system";
   outlineText?: string;
@@ -53,6 +54,11 @@ export function OutlinePageCard({
       </p>
 
       <div className="mt-4 flex flex-wrap gap-2">
+        {page.debugPageType ? (
+          <span className="rounded-full bg-[#eef3ff] px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.12em] text-[#3b5ccc]">
+            {page.debugPageType}
+          </span>
+        ) : null}
         <span className="rounded-full bg-[#f3f5f8] px-2.5 py-1 text-[11px] font-medium text-slate-600">
           {page.pageKind === "packaging" ? "包装页" : "内容页"}
         </span>

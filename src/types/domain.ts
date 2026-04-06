@@ -1,3 +1,5 @@
+import type { PageModel } from "@/types/pageModel";
+
 export type WorkType = "magazine" | "report";
 export type StageKey = "outline" | "candidates" | "packaging" | "hard-edit" | "export";
 export type ExportFormat = "pdf" | "pptx";
@@ -106,6 +108,7 @@ export interface PageVersion {
   variantSummary: string;
   derivedFromVersionId: string | null;
   previewsByPageId: Record<string, string>;
+  pageModelsByPageId?: Record<string, PageModel>;
   isSelected: boolean;
   isApproved: boolean;
   createdAt: string;

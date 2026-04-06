@@ -1,4 +1,6 @@
+import { createGeneratedCaseContract, createGeneratedOverviewContract, createGeneratedSummaryContract, createManualDataContract, createPageContentPlan, createPageIntent, fillContractToPageModel, renderPageModelToHtml } from "@/lib/pageModel";
 import type { Asset, Page, PageVersion, Project, Task, WorkType } from "@/types/domain";
+import type { PageIntent, PageModel } from "@/types/pageModel";
 
 interface SeedTaskResult {
   project: Project;
@@ -42,40 +44,34 @@ const MOCK_INITIAL_PAGE_BLUEPRINTS: MockPageBlueprint[] = [
   },
   {
     pageKind: "content",
-    pageRole: "case-study",
-    pageType: "案例页",
-    outlineText: "选取 2 个 AI 商业化案例，突出场景、收益与可复用启示。",
+    pageRole: "feature",
+    pageType: "数据页",
+    outlineText: "围绕一组核心指标与趋势变化形成数据页，突出关键数字、对比关系与补充说明。",
     sourceMode: "user",
-    expressionMode: "hybrid",
-    styleText: "图文结合，强调案例块结构",
-    userConstraints: "保留一个图表区域。",
+    expressionMode: "chart",
+    styleText: "图表为主，重点突出关键指标",
+    userConstraints: "保留一块图表说明和一块表格信息。",
     userProvidedContentBlocks: [
       {
         id: createId("block"),
         type: "text",
-        text: "案例 1：企业内部知识库助手上线后，检索效率提升。",
-      },
-      {
-        id: createId("block"),
-        type: "image",
-        imageUrl: "",
-        altText: "案例配图占位",
-        caption: "这里后续可替换成真实图片上传结果。",
+        text: "重点观察指标：模型调用量持续提升，但平均单次成本开始下降。",
       },
       {
         id: createId("block"),
         type: "chart_desc",
-        description: "希望展示两个案例的投入产出对比。",
-        chartTypeHint: "bar",
+        description: "展示本月三组核心指标的变化趋势，并突出最值得关注的增幅。",
+        chartTypeHint: "column",
       },
       {
         id: createId("block"),
         type: "table",
-        rawInput: "指标,案例A,案例B\n上线周期,2周,3周\n效率提升,35%,28%",
-        columns: ["指标", "案例A", "案例B"],
+        rawInput: "指标,本月,上月,变化\n活跃项目数,128,94,+36%\n平均调用成本,0.39,0.46,-15%\n线索转化率,18%,13%,+5pt",
+        columns: ["指标", "本月", "上月", "变化"],
         rows: [
-          ["上线周期", "2周", "3周"],
-          ["效率提升", "35%", "28%"],
+          ["活跃项目数", "128", "94", "+36%"],
+          ["平均调用成本", "0.39", "0.46", "-15%"],
+          ["线索转化率", "18%", "13%", "+5pt"],
         ],
       },
     ],
@@ -83,14 +79,51 @@ const MOCK_INITIAL_PAGE_BLUEPRINTS: MockPageBlueprint[] = [
   },
   {
     pageKind: "content",
-    pageRole: "feature",
-    pageType: "专题拆解",
-    outlineText: "围绕一个重点议题做更深入的结构化拆解，形成专题说明页。",
-    sourceMode: "system",
+    pageRole: "case-study",
+    pageType: "案例拆解",
+    outlineText: "围绕一个已发生的业务场景做案例拆解，交代对象、问题、关键做法与最终成效。",
+    sourceMode: "user",
     expressionMode: "mixed-media",
-    styleText: "专题化、重点突出",
-    userConstraints: "需要保留一块关键信息框。",
-    userProvidedContentBlocks: [],
+    styleText: "案例叙事清晰、图文关系明确",
+    userConstraints: "需要保留案例对象、关键做法和结果启示。",
+    userProvidedContentBlocks: [
+      {
+        id: createId("block"),
+        type: "image",
+        imageUrl: "mock://case-1",
+        altText: "案例场景 1",
+        caption: "案例对象与使用场景",
+      },
+      {
+        id: createId("block"),
+        type: "image",
+        imageUrl: "mock://case-2",
+        altText: "案例场景 2",
+        caption: "关键步骤中的界面与流程",
+      },
+      {
+        id: createId("block"),
+        type: "image",
+        imageUrl: "mock://case-3",
+        altText: "案例场景 3",
+        caption: "结果呈现与最终效果",
+      },
+      {
+        id: createId("block"),
+        type: "text",
+        text: "案例对象：一个已经将模型能力嵌入实际工作流的团队。",
+      },
+      {
+        id: createId("block"),
+        type: "text",
+        text: "关键做法：先收清流程问题，再把模型能力与人工审核串成稳定路径。",
+      },
+      {
+        id: createId("block"),
+        type: "text",
+        text: "最终成效：效率提升和结果质量改善可以被读者直接带走。",
+      },
+    ],
     coverMeta: null,
   },
   {
@@ -141,7 +174,7 @@ const MOCK_DEFERRED_PAGE_BLUEPRINTS: MockPageBlueprint[] = [
   },
 ];
 
-export const DEFAULT_MOCK_PAGE_COUNT = 3;
+export const DEFAULT_MOCK_PAGE_COUNT = 4;
 const INITIAL_MOCK_VERSION_COUNT = 3;
 
 function createId(prefix: string) {
@@ -192,18 +225,151 @@ const variantCardBodies = [
 
 const variantChartCaptions = ["摘要数据", "案例数据", "关键指标"];
 const variantImageCaptions = ["版面主视觉", "案例主图", "结果对照"];
-const variantSummaries = [
-  "摘要优先版：标题和摘要区更突出，阅读路径更稳",
-  "案例展开版：案例区更靠前，图文主体感更强",
-  "结论强化版：结论区更突出，适合快速浏览抓重点",
-];
+const MOCK_VALIDATION_FIXTURES = [
+  {
+    key: "baseline-consistent",
+    label: "基线一致场景",
+    summary: "requested / resolved / filled 保持一致，用于确认基础链路。",
+  },
+  {
+    key: "degrade-and-underfill",
+    label: "可降级 / 填充不足场景",
+    summary: "验证 allowDegrade 生效，以及 filled 低于 resolved 的情况。",
+  },
+  {
+    key: "strict-capacity-gap",
+    label: "严格承接 / 供给不足场景",
+    summary: "验证 requested 高于 resolved 或 filled，且页面主体槽位随之变化。",
+  },
+] as const;
 
 function getVariantFamily(variant: number) {
   return variant % INITIAL_MOCK_VERSION_COUNT;
 }
 
 export function getMockVersionStrategySummary(family: number) {
-  return variantSummaries[family] ?? variantSummaries[0];
+  return MOCK_VALIDATION_FIXTURES[family]?.label ?? MOCK_VALIDATION_FIXTURES[0].label;
+}
+
+function clonePageWithBlocks(page: Page, userProvidedContentBlocks: Page["userProvidedContentBlocks"], patch?: Partial<Page>) {
+  return {
+    ...page,
+    ...patch,
+    userProvidedContentBlocks,
+  };
+}
+
+function applyMockValidationFixture(page: Page, family = 0): Page {
+  if (family === 1) {
+    if (page.pageRole === "case-study") {
+      const images = page.userProvidedContentBlocks.filter((block) => block.type === "image").slice(0, 2);
+      const texts = page.userProvidedContentBlocks.filter((block) => block.type === "text");
+      return clonePageWithBlocks(page, [...images, ...texts], {
+        userConstraints: "开发态 fixture：请求 3 组图文，但当前只提供 2 张图，允许按供给降级承接。",
+      });
+    }
+
+    if (page.pageRole === "feature" && page.pageType.includes("数据")) {
+      const chart = page.userProvidedContentBlocks.find((block) => block.type === "chart_desc");
+      const table = page.userProvidedContentBlocks.find((block) => block.type === "table");
+      return clonePageWithBlocks(page, [chart, table].filter(Boolean) as Page["userProvidedContentBlocks"], {
+        userConstraints: "开发态 fixture：保留图表，但说明文字不足，用于验证 filled 低于 resolved。",
+      });
+    }
+  }
+
+  if (family === 2) {
+    if (page.pageRole === "case-study") {
+      const images = page.userProvidedContentBlocks.filter((block) => block.type === "image").slice(0, 2);
+      const texts = page.userProvidedContentBlocks.filter((block) => block.type === "text").slice(0, 2);
+      return clonePageWithBlocks(page, [...images, ...texts], {
+        userConstraints: "开发态 fixture：请求 3 组图文，但当前供给不足且不允许降级，用于验证 resolved 高于 filled。",
+      });
+    }
+
+    if (page.pageRole === "feature" && page.pageType.includes("数据")) {
+      return clonePageWithBlocks(page, page.userProvidedContentBlocks, {
+        userConstraints: "开发态 fixture：请求 2 组 chartExplanationPair，但当前只承接 1 组。",
+      });
+    }
+  }
+
+  return page;
+}
+
+function applyIntentFixtureOverrides(page: Page, pageIntent: PageIntent, family = 0): PageIntent {
+  if (page.pageRole === "case-study") {
+    if (family === 1) {
+      return {
+        ...pageIntent,
+        expressionMode: "image-text",
+        preferredImageCount: 3,
+        visualPriority: "high",
+        allowDegrade: true,
+      };
+    }
+
+    if (family === 2) {
+      return {
+        ...pageIntent,
+        expressionMode: "image-text",
+        preferredImageCount: 3,
+        visualPriority: "high",
+        allowDegrade: false,
+      };
+    }
+  }
+
+  if (page.pageRole === "feature" && page.pageType.includes("数据")) {
+    if (family === 1) {
+      return {
+        ...pageIntent,
+        expressionMode: "chart-led",
+        preferredChartCount: 1,
+        allowDegrade: false,
+      };
+    }
+
+    if (family === 2) {
+      return {
+        ...pageIntent,
+        expressionMode: "chart-led",
+        preferredChartCount: 2,
+        allowDegrade: true,
+      };
+    }
+  }
+
+  return pageIntent;
+}
+
+export function buildMockPageModel(page: Page, versionLabel: string, variant = 0, _familyOverride?: number): PageModel | null {
+  const fixtureFamily = _familyOverride ?? 0;
+  const fixturePage = applyMockValidationFixture(page, fixtureFamily);
+  const rawPageIntent = createPageIntent(fixturePage);
+  const pageIntent = rawPageIntent ? applyIntentFixtureOverrides(fixturePage, rawPageIntent, fixtureFamily) : null;
+  const contentPlan = pageIntent ? createPageContentPlan(fixturePage, pageIntent) : null;
+  const overviewContract = createGeneratedOverviewContract(fixturePage, versionLabel, pageIntent, contentPlan);
+  if (overviewContract) {
+    return fillContractToPageModel(overviewContract, variant);
+  }
+
+  const dataContract = createManualDataContract(fixturePage, versionLabel, pageIntent, contentPlan);
+  if (dataContract) {
+    return fillContractToPageModel(dataContract, variant);
+  }
+
+  const caseContract = createGeneratedCaseContract(fixturePage, versionLabel, pageIntent, contentPlan);
+  if (caseContract) {
+    return fillContractToPageModel(caseContract, variant);
+  }
+
+  const summaryContract = createGeneratedSummaryContract(fixturePage, versionLabel, pageIntent, contentPlan);
+  if (summaryContract) {
+    return fillContractToPageModel(summaryContract, variant);
+  }
+
+  return null;
 }
 
 function renderSummaryFirstLayout(params: {
@@ -1059,6 +1225,13 @@ function renderContentPreviewLayout(params: {
 }
 
 export function buildMockPreviewHtml(page: Page, versionLabel: string, _promptNote: string, variant = 0, familyOverride?: number) {
+  const pageModel = buildMockPageModel(page, versionLabel, variant, familyOverride);
+  if (pageModel) {
+    return renderPageModelToHtml(pageModel);
+  }
+
+  // Legacy fallback for page types that have not migrated to the
+  // Layout Contract -> PageModel -> Renderer path yet.
   const palettes = [
     { accent: "#111827", soft: "#f5f7fb", border: "#dbe3ef" },
     { accent: "#0f4c81", soft: "#eef6fc", border: "#c9ddf1" },
@@ -1145,7 +1318,13 @@ function createMockVersionSet(taskId: string, pages: Page[], variantSeed = 0): P
   const now = Date.now();
   return Array.from({ length: INITIAL_MOCK_VERSION_COUNT }, (_, index) => {
     const versionLabel = `V${index + 1}`;
-    const promptNote = index === 0 ? "初版候选结果" : `候选偏向：${variantSummaries[index]}`;
+    const fixture = MOCK_VALIDATION_FIXTURES[index] ?? MOCK_VALIDATION_FIXTURES[0];
+    const promptNote = `${fixture.label} · ${fixture.summary}`;
+    const pageModelsByPageId = Object.fromEntries(
+      pages
+        .map((page, pageIndex) => [page.id, buildMockPageModel(page, versionLabel, variantSeed + index + pageIndex, index)] as const)
+        .filter((entry): entry is readonly [string, PageModel] => Boolean(entry[1])),
+    );
     return {
       id: createId("version"),
       taskId,
@@ -1154,6 +1333,7 @@ function createMockVersionSet(taskId: string, pages: Page[], variantSeed = 0): P
       variantSummary: getMockVersionStrategySummary(index),
       derivedFromVersionId: null,
       previewsByPageId: buildSchemePreviewMap(pages, versionLabel, promptNote, variantSeed + index, index),
+      pageModelsByPageId,
       isSelected: index === 0,
       isApproved: false,
       createdAt: new Date(now + index * 1000).toISOString(),
