@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { getOrderedCompositionPages } from "@/lib/finalComposition";
 import { formatTime } from "@/lib/format";
 import { useAppStore } from "@/store/appStore";
 import type { Asset, FinalCompositionPage } from "@/types/domain";
@@ -95,6 +96,25 @@ function PageThumbnail({
   );
 }
 
+function applyEditedResultToCompositionPage(
+  page: FinalCompositionPage,
+  editedResult:
+    | {
+        compositionPageId: string;
+        previewHtml: string;
+      }
+    | undefined,
+) {
+  if (!editedResult || editedResult.compositionPageId !== page.id) {
+    return page;
+  }
+
+  return {
+    ...page,
+    previewHtml: editedResult.previewHtml || page.previewHtml,
+  };
+}
+
 function PreviewModal({
   pages,
   pageIndex,
@@ -185,7 +205,9 @@ export function AssetsPage() {
   const assets = useAppStore((state) => state.assets);
   const tasks = useAppStore((state) => state.tasks);
   const projects = useAppStore((state) => state.projects);
+  const finalCompositions = useAppStore((state) => state.finalCompositions);
   const finalCompositionPages = useAppStore((state) => state.finalCompositionPages);
+  const editedCompositionPageResults = useAppStore((state) => state.editedCompositionPageResults);
 
   const totalPages = assets.reduce((sum, asset) => sum + asset.pageCount, 0);
   const exportFormats = Array.from(new Set(assets.map((asset) => asset.exportFormat.toUpperCase())));
@@ -195,10 +217,15 @@ export function AssetsPage() {
       return [];
     }
 
-    return finalCompositionPages
-      .filter((page) => page.compositionId === activePreview.compositionId)
-      .sort((a, b) => a.orderIndex - b.orderIndex);
-  }, [activePreview, finalCompositionPages]);
+    const composition = finalCompositions.find((item) => item.id === activePreview.compositionId);
+    const pages = finalCompositionPages.filter((page) => page.compositionId === activePreview.compositionId);
+    const editedResultMap = new Map(
+      editedCompositionPageResults
+        .filter((item) => item.compositionId === activePreview.compositionId)
+        .map((item) => [item.compositionPageId, item] as const),
+    );
+    return getOrderedCompositionPages(composition, pages).map((page) => applyEditedResultToCompositionPage(page, editedResultMap.get(page.id)));
+  }, [activePreview, editedCompositionPageResults, finalCompositionPages, finalCompositions]);
 
   return (
     <div className="rounded-[28px] bg-transparent p-2">
@@ -231,10 +258,20 @@ export function AssetsPage() {
           {assets.map((asset) => {
             const task = tasks.find((item) => item.id === asset.taskId);
             const project = projects.find((item) => item.id === task?.projectId);
-            const compositionPages = finalCompositionPages
-              .filter((page) => page.compositionId === asset.compositionId)
-              .sort((a, b) => a.orderIndex - b.orderIndex);
+            const composition = finalCompositions.find((item) => item.id === asset.compositionId);
+            const editedResultMap = new Map(
+              editedCompositionPageResults
+                .filter((item) => item.compositionId === asset.compositionId)
+                .map((item) => [item.compositionPageId, item] as const),
+            );
+            const compositionPages = getOrderedCompositionPages(
+              composition,
+              finalCompositionPages.filter((page) => page.compositionId === asset.compositionId),
+            ).map((page) => applyEditedResultToCompositionPage(page, editedResultMap.get(page.id)));
             const includesPackaging = compositionPages.some((page) => page.pageKind === "packaging");
+            const includesContentPageModel = compositionPages.some((page) => page.pageKind === "content" && Boolean(page.sourcePageModel));
+            const includesPackagingFormalPage = compositionPages.some((page) => page.pageKind === "packaging" && Boolean(page.sourcePackagingPage));
+            const editedCount = asset.editedPageCount || editedResultMap.size;
             const statusMeta = getStatusMeta(asset);
             const cleanDescription =
               asset.description === "Seed asset placeholder" ||
@@ -259,7 +296,25 @@ export function AssetsPage() {
                       <span>生成于 {formatTime(asset.createdAt)}</span>
                       <span>项目：{project?.name ?? "default project"}</span>
                       <span>{includesPackaging ? "含封面页 / 目录页" : "内容页结果"}</span>
+                      <span>
+                        {asset.resultSourceKind === "edited-result"
+                          ? `已应用硬编辑 ${editedCount} 页`
+                          : asset.resultSourceKind === "composition-default"
+                            ? "当前显示原 composition 结果"
+                            : "当前显示兼容回退结果"}
+                      </span>
                     </div>
+
+                    <p className="mt-2 text-xs text-muted">
+                      当前结果基于 Final Composition 的最终编排页：
+                      {includesContentPageModel ? " 内容页正式对象已承接。" : " 内容页仍含兼容回退。"}
+                      {includesPackaging
+                        ? includesPackagingFormalPage
+                          ? " 包装页正式对象已承接。"
+                          : " 包装页仍含兼容回退。"
+                        : ""}
+                      {asset.resultSourceKind === "edited-result" ? " 当前产物与预览优先展示编辑后页面。" : ""}
+                    </p>
 
                     {cleanDescription ? <p className="mt-4 max-w-4xl text-sm leading-7 text-muted">{cleanDescription}</p> : null}
 

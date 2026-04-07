@@ -1441,6 +1441,8 @@ export function createSeedTask(
       fileSizeBytes: 0,
       readyAt: null,
       errorMessage: "",
+      resultSourceKind: "composition-default",
+      editedPageCount: 0,
       status: "completed",
     },
   ];

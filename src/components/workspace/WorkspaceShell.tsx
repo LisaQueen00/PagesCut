@@ -4,10 +4,14 @@ import { OutlinePageCard } from "@/components/workspace/OutlinePageCard";
 import { StageOneDrawer } from "@/components/workspace/StageOneDrawer";
 import { StageTwoDrawer } from "@/components/workspace/StageTwoDrawer";
 import { WorkspaceStageRail } from "@/components/workspace/WorkspaceStageRail";
+import { mergeCompositionPageWithEditedResult } from "@/lib/finalComposition";
 import { formatTime } from "@/lib/format";
 import { getPageDisplayLabel, sortPagesForFinalOrder } from "@/lib/pageDisplay";
+import { getCompositionPageResultSourceKind } from "@/lib/workflowGuards";
+import { PackagingPagePreview } from "@/lib/packagingFormal";
+import { PageModelPreview } from "@/lib/pageModel";
 import { useAppStore } from "@/store/appStore";
-import type { FinalComposition, FinalCompositionPage, HardEditPageDraft, Page, PageVersion, Task } from "@/types/domain";
+import type { EditedCompositionPageResult, FinalComposition, FinalCompositionPage, HardEditPageDraft, Page, PageVersion, Task } from "@/types/domain";
 
 const stylePool = [
   "现代杂志感，简洁留白",
@@ -16,6 +20,14 @@ const stylePool = [
   "冷静科技感，强调标题层级",
   "高端刊物风，边界轻、留白大",
 ];
+
+const A4_RATIO = 210 / 297;
+const SLIDE_RATIO = 16 / 9;
+const PREVIEW_BASE_WIDTH = 920;
+
+function getPreviewRatio(format: "pdf" | "pptx") {
+  return format === "pptx" ? SLIDE_RATIO : A4_RATIO;
+}
 
 function getGroupedPages<T extends Page | FinalCompositionPage>(pages: T[]) {
   const orderedPages = sortPagesForFinalOrder(pages);
@@ -602,14 +614,37 @@ function PackagingWorkspace({
 }
 
 function HardEditPagePreview({
+  task,
   page,
   pageLabel,
   draft,
+  editedResult,
 }: {
+  task: Task;
   page: FinalCompositionPage;
   pageLabel: string;
   draft: HardEditPageDraft;
+  editedResult?: EditedCompositionPageResult;
 }) {
+  const effectivePage = mergeCompositionPageWithEditedResult(page, editedResult);
+  const previewContentPageModel = editedResult?.editedPageModel ?? (!editedResult ? page.sourcePageModel : undefined);
+  const previewPackagingPage = editedResult?.editedPackagingPage ?? (!editedResult ? page.sourcePackagingPage : undefined);
+  const prefersPageModel = page.pageKind === "content" && Boolean(previewContentPageModel);
+  const ratio = getPreviewRatio(task.preferredExportFormat);
+  const previewMaxWidth = task.preferredExportFormat === "pptx" ? 820 : 760;
+  const frameWidth = previewMaxWidth;
+  const frameHeight = Math.round(frameWidth / ratio);
+  const scale = frameWidth / PREVIEW_BASE_WIDTH;
+  const htmlBaseHeight = Math.round(PREVIEW_BASE_WIDTH / ratio);
+
+  const previewSourceLabel = editedResult
+    ? "当前预览使用编辑后结果"
+      : page.pageKind === "content" && previewContentPageModel
+        ? "当前预览使用 composition page 承接的内容页正式结果"
+      : page.pageKind === "packaging" && previewPackagingPage
+        ? "当前预览使用 composition page 承接的包装页正式结果"
+        : "当前预览回退到 composition 默认结果";
+
   return (
     <section className="soft-grid relative overflow-hidden rounded-[28px] border border-line/70 bg-white p-6 shadow-panel">
       <div className="absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-[#f8fafc] to-transparent" />
@@ -625,55 +660,48 @@ function HardEditPagePreview({
         </div>
 
         <div className="mt-7 rounded-[28px] border border-line/70 bg-[#fcfdff] p-6 shadow-sm">
-          {page.pageRole === "cover" ? (
-            <article className="rounded-[26px] border border-line/70 bg-white p-8">
-              <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
-                <div className="rounded-[24px] bg-ink p-7 text-white">
-                  <p className="text-xs uppercase tracking-[0.22em] text-white/70">Cover</p>
-                  <h3 className="mt-4 text-4xl font-semibold leading-tight">{draft.title}</h3>
-                  <p className="mt-5 text-base leading-8 text-white/85">{draft.subtitle}</p>
-                </div>
-                <div className="rounded-[24px] border border-line/70 bg-[#f7f9fc] p-7">
-                  <p className="text-xs uppercase tracking-[0.22em] text-muted">主视觉说明</p>
-                  <p className="mt-4 text-lg leading-8 text-ink">{draft.bodyText}</p>
-                  <p className="mt-8 text-sm leading-7 text-muted">{draft.footerNote}</p>
-                </div>
-              </div>
-            </article>
-          ) : page.pageRole === "toc" ? (
-            <article className="rounded-[26px] border border-line/70 bg-white p-8">
-              <p className="text-xs uppercase tracking-[0.22em] text-muted">Table Of Contents</p>
-              <h3 className="mt-3 text-3xl font-semibold text-ink">{draft.title}</h3>
-              <p className="mt-3 text-sm leading-7 text-muted">{draft.subtitle}</p>
-              <div className="mt-6 whitespace-pre-line rounded-[22px] bg-[#f7f9fc] p-6 text-base leading-8 text-ink">{draft.bodyText}</div>
-              <p className="mt-5 text-sm leading-7 text-muted">{draft.footerNote}</p>
-            </article>
-          ) : (
-            <article className="rounded-[26px] border border-line/70 bg-white p-8">
-              <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.22em] text-muted">Final Page</p>
-                  <h3 className="mt-3 text-3xl font-semibold text-ink">{draft.title}</h3>
-                  <p className="mt-4 text-base leading-8 text-muted">{draft.subtitle}</p>
-                  <div className="mt-6 rounded-[22px] bg-[#f7f9fc] p-6 text-[17px] leading-9 text-ink">{draft.bodyText}</div>
-                </div>
-                <div className="space-y-4">
-                  <div className="rounded-[22px] border border-line/70 bg-white p-5">
-                    <p className="text-xs uppercase tracking-[0.22em] text-muted">图片说明</p>
-                    <p className="mt-3 text-sm leading-7 text-ink">{draft.imageCaption || "当前页无图片说明"}</p>
-                  </div>
-                  <div className="rounded-[22px] border border-line/70 bg-white p-5">
-                    <p className="text-xs uppercase tracking-[0.22em] text-muted">图表说明</p>
-                    <p className="mt-3 text-sm leading-7 text-ink">{draft.chartCaption || "当前页无图表说明"}</p>
-                  </div>
-                  <div className="rounded-[22px] border border-line/70 bg-white p-5">
-                    <p className="text-xs uppercase tracking-[0.22em] text-muted">页尾备注</p>
-                    <p className="mt-3 text-sm leading-7 text-ink">{draft.footerNote || "当前页无补充备注"}</p>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.22em] text-muted">Formal Preview</p>
+              <p className="mt-2 text-sm leading-6 text-muted">{previewSourceLabel}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs uppercase tracking-[0.18em] text-muted">Ratio</p>
+              <p className="mt-2 text-sm font-medium text-ink">{task.preferredExportFormat === "pptx" ? "16:9" : "A4"}</p>
+            </div>
+          </div>
+
+          <div className="mt-6 rounded-[24px] border border-line/70 bg-white p-5 shadow-sm">
+            <div className="mx-auto flex w-full justify-center">
+              {prefersPageModel && previewContentPageModel ? (
+                <PageModelPreview pageModel={previewContentPageModel} maxWidth={previewMaxWidth} />
+              ) : page.pageKind === "packaging" && previewPackagingPage ? (
+                <PackagingPagePreview pageRole={page.pageRole} formal={previewPackagingPage} maxWidth={previewMaxWidth} />
+              ) : (
+                <div className="w-full max-w-[820px] overflow-hidden rounded-[20px] border border-line/70 bg-[#f4f7fb] p-4">
+                  <div
+                    className="mx-auto overflow-hidden rounded-[18px] bg-white shadow-sm"
+                    style={{ width: frameWidth, maxWidth: "100%", height: frameHeight }}
+                  >
+                    <div
+                      className="origin-top-left"
+                      style={{ width: PREVIEW_BASE_WIDTH, height: htmlBaseHeight, transform: `scale(${scale})` }}
+                      dangerouslySetInnerHTML={{ __html: effectivePage.previewHtml }}
+                    />
                   </div>
                 </div>
-              </div>
-            </article>
-          )}
+              )}
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[18px] border border-line/70 bg-[#f8fafc] px-4 py-3 text-xs text-muted">
+              <span>
+                当前预览对象：{editedResult ? "EditedCompositionPageResult" : "Composition 默认结果"}
+              </span>
+              <span>
+                {draft.isDirty ? "右侧存在未保存编辑，当前中间预览仍显示最近一次已保存结果。" : "当前中间预览已与最近一次保存结果对齐。"}
+              </span>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -693,6 +721,7 @@ function HardEditWorkspace({
 }) {
   const setTaskSelectedPage = useAppStore((state) => state.setTaskSelectedPage);
   const hardEditDrafts = useAppStore((state) => state.hardEditDrafts);
+  const editedCompositionPageResults = useAppStore((state) => state.editedCompositionPageResults);
   const updateHardEditDraft = useAppStore((state) => state.updateHardEditDraft);
   const saveHardEditDraft = useAppStore((state) => state.saveHardEditDraft);
   const enterExportStage = useAppStore((state) => state.enterExportStage);
@@ -710,6 +739,10 @@ function HardEditWorkspace({
   const draft = useMemo(
     () => hardEditDrafts.find((item) => item.taskId === task.id && item.compositionPageId === selectedPage.id),
     [hardEditDrafts, selectedPage.id, task.id],
+  );
+  const editedResult = useMemo(
+    () => editedCompositionPageResults.find((item) => item.taskId === task.id && item.compositionPageId === selectedPage.id),
+    [editedCompositionPageResults, selectedPage.id, task.id],
   );
   const pageLabel = getPageDisplayLabel(selectedPage, compositionPages);
 
@@ -730,6 +763,12 @@ function HardEditWorkspace({
     setTaskSelectedPage(task.id, pageId);
   }
 
+  function updateEditableElement(elementId: string, value: string) {
+    updateHardEditDraft(currentDraft.id, {
+      editableElements: currentDraft.editableElements.map((element) => (element.id === elementId ? { ...element, value } : element)),
+    });
+  }
+
   return (
     <div className="grid flex-1 gap-4 xl:grid-cols-[280px_minmax(0,1fr)_340px]">
       <StageSidebar
@@ -741,7 +780,7 @@ function HardEditWorkspace({
         hardEditDraftMap={hardEditDraftMap}
       />
 
-      <HardEditPagePreview page={selectedPage} pageLabel={pageLabel} draft={draft} />
+      <HardEditPagePreview task={task} page={selectedPage} pageLabel={pageLabel} draft={draft} editedResult={editedResult} />
 
       <aside className="rounded-[24px] border border-line/70 bg-[#f8fafc] p-4">
         <p className="text-xs uppercase tracking-[0.22em] text-muted">Hard Edit Fields</p>
@@ -755,7 +794,18 @@ function HardEditWorkspace({
               </span>
             </div>
             <p className="mt-3 text-sm leading-6 text-muted">最近保存时间：{formatTime(draft.lastSavedAt)}</p>
-            <p className="mt-2 text-xs text-muted">来源编排页：{pageLabel}，来源版本：{draft.sourceVersionId}</p>
+            <p className="mt-2 text-xs text-muted">
+              {editedResult ? `当前页已有编辑后结果，更新于 ${formatTime(editedResult.updatedAt)}。` : "当前页尚未生成编辑后结果，结果页仍会回退到 composition 默认结果。"}
+            </p>
+            <p className="mt-2 text-xs text-muted">
+              来源编排页：{pageLabel}，来源版本：{draft.sourceVersionId}
+              {" · "}
+              {draft.sourceObjectKind === "content-page-model"
+                ? "内容页正式对象"
+                : draft.sourceObjectKind === "packaging-formal-page"
+                  ? "包装页正式对象"
+                  : "兼容回退来源"}
+            </p>
             <button
               type="button"
               onClick={() => saveHardEditDraft(draft.id)}
@@ -776,57 +826,35 @@ function HardEditWorkspace({
           </section>
 
           <section className="rounded-[20px] border border-line/70 bg-white p-4">
-            <p className="text-sm font-medium text-ink">标题</p>
-            <input
-              value={draft.title}
-              onChange={(event) => updateHardEditDraft(draft.id, { title: event.target.value })}
-              className="mt-3 w-full rounded-2xl border border-line/70 bg-[#fbfcfd] px-4 py-3 text-sm text-ink outline-none transition focus:border-ink/20"
-            />
-          </section>
-
-          <section className="rounded-[20px] border border-line/70 bg-white p-4">
-            <p className="text-sm font-medium text-ink">副标题 / 摘要</p>
-            <textarea
-              value={draft.subtitle}
-              onChange={(event) => updateHardEditDraft(draft.id, { subtitle: event.target.value })}
-              className="mt-3 min-h-[96px] w-full resize-none rounded-2xl border border-line/70 bg-[#fbfcfd] px-4 py-3 text-sm leading-7 text-ink outline-none transition focus:border-ink/20"
-            />
-          </section>
-
-          <section className="rounded-[20px] border border-line/70 bg-white p-4">
-            <p className="text-sm font-medium text-ink">正文 / 主视觉文案</p>
-            <textarea
-              value={draft.bodyText}
-              onChange={(event) => updateHardEditDraft(draft.id, { bodyText: event.target.value })}
-              className="mt-3 min-h-[140px] w-full resize-none rounded-2xl border border-line/70 bg-[#fbfcfd] px-4 py-3 text-sm leading-7 text-ink outline-none transition focus:border-ink/20"
-            />
-          </section>
-
-          <section className="rounded-[20px] border border-line/70 bg-white p-4">
-            <p className="text-sm font-medium text-ink">图片说明</p>
-            <input
-              value={draft.imageCaption}
-              onChange={(event) => updateHardEditDraft(draft.id, { imageCaption: event.target.value })}
-              className="mt-3 w-full rounded-2xl border border-line/70 bg-[#fbfcfd] px-4 py-3 text-sm text-ink outline-none transition focus:border-ink/20"
-            />
-          </section>
-
-          <section className="rounded-[20px] border border-line/70 bg-white p-4">
-            <p className="text-sm font-medium text-ink">图表标题 / 说明</p>
-            <input
-              value={draft.chartCaption}
-              onChange={(event) => updateHardEditDraft(draft.id, { chartCaption: event.target.value })}
-              className="mt-3 w-full rounded-2xl border border-line/70 bg-[#fbfcfd] px-4 py-3 text-sm text-ink outline-none transition focus:border-ink/20"
-            />
-          </section>
-
-          <section className="rounded-[20px] border border-line/70 bg-white p-4">
-            <p className="text-sm font-medium text-ink">补充块内容 / 页尾备注</p>
-            <textarea
-              value={draft.footerNote}
-              onChange={(event) => updateHardEditDraft(draft.id, { footerNote: event.target.value })}
-              className="mt-3 min-h-[96px] w-full resize-none rounded-2xl border border-line/70 bg-[#fbfcfd] px-4 py-3 text-sm leading-7 text-ink outline-none transition focus:border-ink/20"
-            />
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-medium text-ink">当前页可编辑元素</p>
+              <span className="rounded-full bg-[#f3f5f8] px-3 py-1 text-[11px] text-muted">{draft.editableElements.length} 项</span>
+            </div>
+            <p className="mt-3 text-xs leading-6 text-muted">右侧字段现在优先依据当前页面正式元素生成，不再固定写死为一套旧表单字段。</p>
+            <div className="mt-4 space-y-4">
+              {draft.editableElements.map((element) => (
+                <div key={element.id} className="rounded-[18px] border border-line/70 bg-[#fbfcfd] p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-medium text-ink">{element.label}</p>
+                    <span className="rounded-full bg-white px-2.5 py-1 text-[11px] text-muted">{element.kind}</span>
+                  </div>
+                  <p className="mt-2 text-[11px] leading-5 text-muted">{element.sourcePath}</p>
+                  {element.multiline ? (
+                    <textarea
+                      value={element.value}
+                      onChange={(event) => updateEditableElement(element.id, event.target.value)}
+                      className="mt-3 min-h-[112px] w-full resize-none rounded-2xl border border-line/70 bg-white px-4 py-3 text-sm leading-7 text-ink outline-none transition focus:border-ink/20"
+                    />
+                  ) : (
+                    <input
+                      value={element.value}
+                      onChange={(event) => updateEditableElement(element.id, event.target.value)}
+                      className="mt-3 w-full rounded-2xl border border-line/70 bg-white px-4 py-3 text-sm text-ink outline-none transition focus:border-ink/20"
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
           </section>
         </div>
       </aside>
@@ -847,12 +875,35 @@ function ExportWorkspace({
   const createAssetFromFinalComposition = useAppStore((state) => state.createAssetFromFinalComposition);
   const canCreateAsset = useAppStore((state) => state.canEnterExportStage(task.id));
   const assets = useAppStore((state) => state.assets);
+  const editedCompositionPageResults = useAppStore((state) => state.editedCompositionPageResults);
 
   const latestAsset = useMemo(
     () => assets.find((asset) => asset.compositionId === finalComposition.id),
     [assets, finalComposition.id],
   );
   const pageTypes = useMemo(() => finalCompositionPages.map((page) => page.pageType), [finalCompositionPages]);
+  const readinessSummary = useMemo(() => {
+    const editedResultMap = new Map(
+      editedCompositionPageResults
+        .filter((item) => item.taskId === task.id)
+        .map((item) => [item.compositionPageId, item] as const),
+    );
+
+    return finalCompositionPages.reduce(
+      (summary, page) => {
+        const sourceKind = getCompositionPageResultSourceKind(page, editedResultMap.get(page.id));
+        if (sourceKind === "edited-result") {
+          summary.edited += 1;
+        } else if (sourceKind === "composition-default") {
+          summary.compositionDefault += 1;
+        } else {
+          summary.unavailable += 1;
+        }
+        return summary;
+      },
+      { edited: 0, compositionDefault: 0, unavailable: 0 },
+    );
+  }, [editedCompositionPageResults, finalCompositionPages, task.id]);
   const isPdfReady = latestAsset?.status === "completed" && latestAsset.fileMimeType === "application/pdf" && latestAsset.downloadUrl.startsWith("data:application/pdf");
   const isProcessing = latestAsset?.status === "preparing" || latestAsset?.status === "processing";
   return (
@@ -888,14 +939,16 @@ function ExportWorkspace({
                   <p className="mt-2 text-xs text-muted">来源版本：{finalComposition.approvedContentVersionId}</p>
                 </div>
                 <div className="rounded-[18px] border border-line/70 bg-white p-4">
-                  <p className="text-xs uppercase tracking-[0.18em] text-muted">Pages</p>
+                  <p className="text-xs uppercase tracking-[0.18em] text-muted">Page Collections</p>
                   <p className="mt-2 text-sm font-semibold text-ink">{finalCompositionPages.length} 页</p>
-                  <p className="mt-2 text-xs text-muted">前置包装 + 内容页 + 最终编排顺序</p>
+                  <p className="mt-2 text-xs text-muted">
+                    前置 {finalComposition.frontCompositionPageIds.length} · 内容 {finalComposition.contentCompositionPageIds.length} · 后置 {finalComposition.rearCompositionPageIds.length}
+                  </p>
                 </div>
                 <div className="rounded-[18px] border border-line/70 bg-white p-4">
-                  <p className="text-xs uppercase tracking-[0.18em] text-muted">Packaging</p>
-                  <p className="mt-2 text-sm font-semibold text-ink">{finalComposition.approvedPackagingCandidateIds.length} 个已选包装结果</p>
-                  <p className="mt-2 text-xs text-muted">封面页 / 目录页已固化进当前 composition</p>
+                  <p className="text-xs uppercase tracking-[0.18em] text-muted">Ordering</p>
+                  <p className="mt-2 text-sm font-semibold text-ink">{finalComposition.orderedCompositionPageIds.length} 个编排位</p>
+                  <p className="mt-2 text-xs text-muted">内容页与包装页已按最终编排顺序固化到 composition</p>
                 </div>
               </div>
 
@@ -930,6 +983,10 @@ function ExportWorkspace({
                     <p className="mt-2 text-xs text-muted">这轮暂不接通真实导出，后续再补。</p>
                   </button>
                 </div>
+                <p className="mt-4 text-xs leading-6 text-muted">
+                  当前 Stage 3 readiness 以正式结果对象为准：edited result {readinessSummary.edited} 页，composition 默认结果 {readinessSummary.compositionDefault} 页
+                  {readinessSummary.unavailable ? `，暂不可用 ${readinessSummary.unavailable} 页。` : "。"}
+                </p>
               </div>
             </div>
 
@@ -937,7 +994,7 @@ function ExportWorkspace({
               <section className="rounded-[24px] border border-line/70 bg-[#f8fafc] p-4">
                 <p className="text-xs uppercase tracking-[0.22em] text-muted">PDF Export</p>
                 <h3 className="mt-2 text-lg font-semibold text-ink">生成真实 PDF 文件</h3>
-                <p className="mt-3 text-sm leading-6 text-muted">当前会直接以 Final Composition 为来源生成真实 PDF，并把文件引用写入 Asset，随后可在 Assets 中下载。</p>
+                <p className="mt-3 text-sm leading-6 text-muted">当前会直接以 Final Composition 中已成立的正式结果为来源生成真实 PDF：有 edited result 时优先使用，无编辑时回退到 composition 默认结果。</p>
                 <button
                   type="button"
                   onClick={() => void createAssetFromFinalComposition(task.id)}

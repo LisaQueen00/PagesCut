@@ -11,6 +11,64 @@ export type PageRole = "cover" | "toc" | "overview" | "case-study" | "feature" |
 export type PageBucket = "front" | "content" | "rear";
 export type CompositionSourceKind = "content-page" | "packaging-page";
 
+export interface PackagingCompositionSource {
+  candidateId: string;
+  pageId: string;
+  pageRole: Extract<PageRole, "cover" | "toc">;
+  candidateLabel: string;
+  promptNote: string;
+  summary: string;
+  basedOnContentVersionId: string;
+}
+
+export type HardEditElementKind =
+  | "hero-title"
+  | "hero-summary"
+  | "rich-text"
+  | "callout-body"
+  | "bullet-list"
+  | "visual-caption"
+  | "visual-kicker"
+  | "chart-title"
+  | "packaging-title"
+  | "packaging-subtitle"
+  | "packaging-kicker"
+  | "packaging-hero"
+  | "packaging-guidance"
+  | "packaging-footer";
+
+export interface HardEditEditableElement {
+  id: string;
+  label: string;
+  kind: HardEditElementKind;
+  sourcePath: string;
+  value: string;
+  multiline: boolean;
+}
+
+export interface PackagingPageFormal {
+  id: string;
+  taskId: string;
+  pageId: string;
+  pageRole: Extract<PageRole, "cover" | "toc">;
+  pageType: string;
+  pageBucket: Extract<PageBucket, "front" | "rear">;
+  sourceCandidateId: string;
+  basedOnContentVersionId: string;
+  candidateLabel: string;
+  promptNote: string;
+  summary: string;
+  title: string;
+  subtitle: string;
+  footerNote: string;
+  kicker?: string;
+  heroLabel?: string;
+  issueLabel?: string;
+  brandLabel?: string;
+  tocEntries?: string[];
+  guidanceNote?: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -134,8 +192,15 @@ export interface FinalComposition {
   id: string;
   taskId: string;
   approvedContentVersionId: string;
+  contentPageIds: string[];
   packagingPageIds: string[];
+  frontSourcePageIds: string[];
+  contentSourcePageIds: string[];
+  rearSourcePageIds: string[];
+  orderedSourcePageIds: string[];
   approvedPackagingCandidateIds: string[];
+  frontApprovedPackagingCandidateIds: string[];
+  rearApprovedPackagingCandidateIds: string[];
   frontCompositionPageIds: string[];
   contentCompositionPageIds: string[];
   rearCompositionPageIds: string[];
@@ -151,11 +216,16 @@ export interface FinalCompositionPage {
   sourcePageId: string;
   sourceKind: CompositionSourceKind;
   sourceVersionId: string;
+  sourcePackagingCandidateId?: string;
+  sourcePackaging?: PackagingCompositionSource;
+  sourcePackagingPageId?: string;
+  sourcePackagingPage?: PackagingPageFormal;
   pageKind: PageKind;
   pageRole: PageRole;
   pageType: string;
   pageBucket: PageBucket;
   orderIndex: number;
+  sourcePageModel?: PageModel;
   previewHtml: string;
   createdAt: string;
 }
@@ -167,7 +237,9 @@ export interface HardEditPageDraft {
   compositionPageId: string;
   sourcePageId: string;
   sourceVersionId: string;
+  sourceObjectKind: "content-page-model" | "packaging-formal-page" | "legacy-source-page";
   sourcePreviewHtml: string;
+  editableElements: HardEditEditableElement[];
   title: string;
   subtitle: string;
   bodyText: string;
@@ -176,6 +248,27 @@ export interface HardEditPageDraft {
   footerNote: string;
   isDirty: boolean;
   lastSavedAt: string;
+}
+
+export interface EditedCompositionPageResult {
+  id: string;
+  taskId: string;
+  compositionId: string;
+  compositionPageId: string;
+  sourcePageId: string;
+  sourceVersionId: string;
+  sourceObjectKind: "content-page-model" | "packaging-formal-page" | "legacy-source-page";
+  editableElements: HardEditEditableElement[];
+  title: string;
+  subtitle: string;
+  bodyText: string;
+  imageCaption: string;
+  chartCaption: string;
+  footerNote: string;
+  editedPageModel?: PageModel;
+  editedPackagingPage?: PackagingPageFormal;
+  previewHtml: string;
+  updatedAt: string;
 }
 
 export interface Asset {
@@ -195,5 +288,7 @@ export interface Asset {
   fileSizeBytes: number;
   readyAt: string | null;
   errorMessage: string;
+  resultSourceKind: "edited-result" | "composition-default" | "legacy-fallback";
+  editedPageCount: number;
   status: "preparing" | "processing" | "completed" | "failed";
 }

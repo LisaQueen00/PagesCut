@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { Navigate, useParams } from "react-router-dom";
 import { WorkspaceShell } from "@/components/workspace/WorkspaceShell";
+import { getOrderedCompositionPages } from "@/lib/finalComposition";
 import { useAppStore } from "@/store/appStore";
 
 export function WorkspacePage() {
@@ -30,8 +31,11 @@ export function WorkspacePage() {
     [allFinalCompositions, taskId],
   );
   const finalCompositionPages = useMemo(
-    () => allFinalCompositionPages.filter((page) => page.taskId === taskId).sort((a, b) => a.orderIndex - b.orderIndex),
-    [allFinalCompositionPages, taskId],
+    () => {
+      const taskPages = allFinalCompositionPages.filter((page) => page.taskId === taskId);
+      return getOrderedCompositionPages(finalComposition, taskPages);
+    },
+    [allFinalCompositionPages, finalComposition, taskId],
   );
 
   if (!taskId || !task) {

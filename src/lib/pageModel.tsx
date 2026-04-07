@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Page, UserProvidedContentBlock } from "@/types/domain";
+import { getContentUnitPolicy, getTextUnitPolicy, resolveTextUnitAssemblyFromTextSources, resolveUnitAssemblyFromPolicy } from "@/lib/contentUnitPolicy";
 import type {
   GeneratedCaseContractInput,
   GeneratedOverviewContractInput,
@@ -8,7 +9,6 @@ import type {
   LayoutContract,
   ManualDataContractInput,
   PageContentPlan,
-  PageContentUnitBinding,
   PageContentPlanUnit,
   PageIntent,
   PageIntentContentArea,
@@ -133,100 +133,14 @@ function countBlocksByType(blocks: UserProvidedContentBlock[], type: UserProvide
   return blocks.filter((block) => block.type === type).length;
 }
 
-function countFilledImageTextPairs(blocks: UserProvidedContentBlock[], resolvedCount: number) {
-  const imageCount = countBlocksByType(blocks, "image");
-  const textCount = countBlocksByType(blocks, "text");
-  return Math.min(imageCount, textCount, resolvedCount);
-}
-
-function countFilledChartExplanationPairs(blocks: UserProvidedContentBlock[], resolvedCount: number) {
-  const chartCount = countBlocksByType(blocks, "chart_desc");
-  const explanationCount = countBlocksByType(blocks, "text");
-  return Math.min(chartCount, Math.max(1, explanationCount), resolvedCount);
-}
-
-function buildImageTextPairBindings(blocks: UserProvidedContentBlock[], resolvedCount: number): PageContentUnitBinding[] {
-  const imageBlocks = blocks.filter((block) => block.type === "image");
-  const textBlocks = blocks.filter((block) => block.type === "text");
-
-  return Array.from({ length: resolvedCount }, (_, index) => {
-    const imageBlock = imageBlocks[index];
-    const textBlock = textBlocks[index];
-    return {
-      unitId: createBlockId("image-text-pair", index),
-      unitType: "imageTextPair",
-      bindings: [
-        imageBlock
-          ? {
-              slotType: "image",
-              source: {
-                sourceId: imageBlock.id,
-                sourceKind: "image-source",
-                label: imageBlock.caption || imageBlock.altText || `image source ${index + 1}`,
-              },
-            }
-          : {
-              slotType: "image",
-              missingReason: "missing-image-source",
-            },
-        textBlock
-          ? {
-              slotType: "text",
-              source: {
-                sourceId: textBlock.id,
-                sourceKind: "text-source",
-                label: clampText(textBlock.text, 26, `text source ${index + 1}`),
-              },
-            }
-          : {
-              slotType: "text",
-              missingReason: "missing-text-source",
-            },
-      ],
-    };
-  });
-}
-
-function buildChartExplanationPairBindings(blocks: UserProvidedContentBlock[], resolvedCount: number): PageContentUnitBinding[] {
-  const chartBlocks = blocks.filter((block) => block.type === "chart_desc");
-  const textBlocks = blocks.filter((block) => block.type === "text");
-
-  return Array.from({ length: resolvedCount }, (_, index) => {
-    const chartBlock = chartBlocks[index];
-    const textBlock = textBlocks[index];
-    return {
-      unitId: createBlockId("chart-explanation-pair", index),
-      unitType: "chartExplanationPair",
-      bindings: [
-        chartBlock
-          ? {
-              slotType: "chart",
-              source: {
-                sourceId: chartBlock.id,
-                sourceKind: "chart-source",
-                label: clampText(chartBlock.description, 26, `chart source ${index + 1}`),
-              },
-            }
-          : {
-              slotType: "chart",
-              missingReason: "missing-chart-source",
-            },
-        textBlock
-          ? {
-              slotType: "explanation",
-              source: {
-                sourceId: textBlock.id,
-                sourceKind: "explanation-source",
-                label: clampText(textBlock.text, 26, `explanation source ${index + 1}`),
-              },
-            }
-          : {
-              slotType: "explanation",
-              missingReason: "missing-explanation-source",
-            },
-      ],
-    };
-  });
+function buildSyntheticTextSources(page: Page, fallbacks: string[]) {
+  return fallbacks
+    .map((value, index) => value.trim() || page.outlineText.trim() || `text source ${index + 1}`)
+    .filter(Boolean)
+    .map((value, index) => ({
+      id: `${page.id}-synthetic-text-${index + 1}`,
+      label: clampText(value, 26, `text source ${index + 1}`),
+    }));
 }
 
 // PageIntent is the bridge between Stage 1 page definition and later layout generation.
@@ -308,20 +222,23 @@ export function createPageContentPlan(page: Page, pageIntent: PageIntent): PageC
         ? Math.min(requestedPairCount, availablePairCount)
         : 1
       : requestedPairCount;
+    const pairPolicy = getContentUnitPolicy("imageTextPair");
+    const pairAssembly = resolveUnitAssemblyFromPolicy("imageTextPair", page.userProvidedContentBlocks, resolvedPairCount);
     return {
       pageId: page.id,
       pageType: pageIntent.pageType,
       units: [
         createPlanUnit(
           {
-            unitType: "imageTextPair",
-            relation: "paired",
+            unitType: pairPolicy.unitType,
+            relation: pairPolicy.relation,
             requestedCount: requestedPairCount,
             resolvedCount: resolvedPairCount,
-            filledCount: countFilledImageTextPairs(page.userProvidedContentBlocks, resolvedPairCount),
+            filledCount: pairAssembly.resolvedUnits.filter((unit) => unit.outcome === "filled").length,
             required: true,
             allowDegrade: pageIntent.allowDegrade,
-            bindings: buildImageTextPairBindings(page.userProvidedContentBlocks, resolvedPairCount),
+            fillRule: pairPolicy.fillRule,
+            assembly: pairAssembly,
           },
           0,
         ),
@@ -334,6 +251,7 @@ export function createPageContentPlan(page: Page, pageIntent: PageIntent): PageC
             filledCount: 2,
             required: false,
             allowDegrade: true,
+            fillRule: "all-required-slots",
           },
           1,
         ),
@@ -346,6 +264,7 @@ export function createPageContentPlan(page: Page, pageIntent: PageIntent): PageC
             filledCount: Math.min(1, countBlocksByType(page.userProvidedContentBlocks, "text") || 1),
             required: true,
             allowDegrade: false,
+            fillRule: "all-required-slots",
           },
           2,
         ),
@@ -363,20 +282,23 @@ export function createPageContentPlan(page: Page, pageIntent: PageIntent): PageC
           ? 1
           : requestedChartPairCount;
     const hasTable = page.userProvidedContentBlocks.some((block) => block.type === "table");
+    const chartPairPolicy = getContentUnitPolicy("chartExplanationPair");
+    const chartPairAssembly = resolveUnitAssemblyFromPolicy("chartExplanationPair", page.userProvidedContentBlocks, resolvedChartPairCount);
     return {
       pageId: page.id,
       pageType: pageIntent.pageType,
       units: [
         createPlanUnit(
           {
-            unitType: "chartExplanationPair",
-            relation: "paired",
+            unitType: chartPairPolicy.unitType,
+            relation: chartPairPolicy.relation,
             requestedCount: requestedChartPairCount,
             resolvedCount: resolvedChartPairCount,
-            filledCount: countFilledChartExplanationPairs(page.userProvidedContentBlocks, resolvedChartPairCount),
+            filledCount: chartPairAssembly.resolvedUnits.filter((unit) => unit.outcome === "filled").length,
             required: true,
             allowDegrade: false,
-            bindings: buildChartExplanationPairBindings(page.userProvidedContentBlocks, resolvedChartPairCount),
+            fillRule: chartPairPolicy.fillRule,
+            assembly: chartPairAssembly,
           },
           0,
         ),
@@ -389,6 +311,7 @@ export function createPageContentPlan(page: Page, pageIntent: PageIntent): PageC
             filledCount: Math.min(3, resolvedChartPairCount + 2),
             required: true,
             allowDegrade: true,
+            fillRule: "all-required-slots",
           },
           1,
         ),
@@ -401,8 +324,71 @@ export function createPageContentPlan(page: Page, pageIntent: PageIntent): PageC
             filledCount: hasTable && pageIntent.requiredContentAreas.includes("table") ? 1 : 0,
             required: pageIntent.requiredContentAreas.includes("table"),
             allowDegrade: true,
+            fillRule: "all-required-slots",
           },
           2,
+        ),
+      ],
+    };
+  }
+
+  if (pageIntent.pageType === "overview") {
+    const requestedTextUnits = 3;
+    const textPolicy = getTextUnitPolicy();
+    const syntheticTextSources = buildSyntheticTextSources(page, [
+      page.outlineText,
+      page.styleText,
+      page.userConstraints,
+    ]);
+    const textAssembly = resolveTextUnitAssemblyFromTextSources(syntheticTextSources, requestedTextUnits);
+    return {
+      pageId: page.id,
+      pageType: pageIntent.pageType,
+      units: [
+        createPlanUnit(
+          {
+            unitType: textPolicy.unitType,
+            relation: "grouped",
+            requestedCount: requestedTextUnits,
+            resolvedCount: requestedTextUnits,
+            filledCount: textAssembly.resolvedUnits.filter((unit) => unit.outcome === "filled").length,
+            required: true,
+            allowDegrade: pageIntent.allowDegrade,
+            fillRule: textAssembly.fillRule,
+            assembly: textAssembly,
+          },
+          0,
+        ),
+      ],
+    };
+  }
+
+  if (pageIntent.pageType === "summary") {
+    const requestedTextUnits = 3;
+    const textPolicy = getTextUnitPolicy();
+    const syntheticTextSources = buildSyntheticTextSources(page, [
+      page.outlineText,
+      page.userConstraints,
+      page.styleText,
+    ]);
+    const textAssembly = resolveTextUnitAssemblyFromTextSources(syntheticTextSources, requestedTextUnits);
+    return {
+      pageId: page.id,
+      pageType: pageIntent.pageType,
+      units: [
+        createPlanUnit(
+          {
+            unitType: textPolicy.unitType,
+            relation: "grouped",
+            requestedCount: requestedTextUnits,
+            resolvedCount: requestedTextUnits,
+            filledCount: textAssembly.resolvedUnits.filter((unit) => unit.outcome === "filled").length,
+            required: true,
+            allowDegrade: pageIntent.allowDegrade,
+            fillRule: textAssembly.fillRule,
+            assembly: textAssembly,
+          },
+          0,
         ),
       ],
     };
@@ -421,6 +407,7 @@ export function createPageContentPlan(page: Page, pageIntent: PageIntent): PageC
           filledCount: Math.min(1, countBlocksByType(page.userProvidedContentBlocks, "text") || 1),
           required: true,
           allowDegrade: pageIntent.allowDegrade,
+          fillRule: "all-required-slots",
         },
         0,
       ),
@@ -490,6 +477,16 @@ export function createGeneratedOverviewContract(page: Page, versionLabel: string
           "随后进入专题页或数据页时，读者应已经知道本期最值得关注的变化方向。",
           ...(pageIntent?.textDensity === "high" ? ["这一页应保留更完整的解释层，而不是只给出单行结论。"] : []),
         ];
+  const effectiveIntent = pageIntent ?? createPageIntent(page);
+  const effectivePlan = _contentPlan ?? (effectiveIntent ? createPageContentPlan(page, effectiveIntent) : null);
+  const textUnit = effectivePlan?.units.find((unit) => unit.unitType === "text");
+  const textAssembly = textUnit?.assembly;
+  const textUnits = Array.from({ length: textUnit?.resolvedCount ?? 0 }, (_, index) => ({
+    label: `判断文本单元 ${index + 1}`,
+    outcome: textAssembly?.resolvedUnits?.[index]?.outcome,
+    textSlotLabel: `text slot ${index + 1}`,
+    slotBindings: textAssembly?.resolvedUnits?.[index]?.slots ?? [],
+  }));
 
   return {
     sourceKind: "generated",
@@ -505,6 +502,15 @@ export function createGeneratedOverviewContract(page: Page, versionLabel: string
     signalMetrics,
     viewpointCards,
     supportPoints: supportParagraphs,
+    textUnits,
+    textUnitStatus: {
+      requestedCount: textUnit?.requestedCount ?? 0,
+      resolvedCount: textUnit?.resolvedCount ?? 0,
+      filledCount: textUnit?.filledCount ?? 0,
+      partialCount: textAssembly?.partialCount ?? 0,
+      unfilledCount: textAssembly?.unfilledCount ?? 0,
+      fillRule: textAssembly?.fillRule ?? textUnit?.fillRule ?? "all-required-slots",
+    },
   };
 }
 
@@ -590,6 +596,7 @@ export function createManualDataContract(page: Page, versionLabel: string, pageI
   const chartPairUnit = effectivePlan?.units.find((unit) => unit.unitType === "chartExplanationPair");
   const metricsUnit = effectivePlan?.units.find((unit) => unit.unitType === "metric");
   const tableUnit = effectivePlan?.units.find((unit) => unit.unitType === "table");
+  const chartPairAssembly = chartPairUnit?.assembly;
   const preferredChartCount = chartPairUnit?.resolvedCount ?? effectiveIntent?.preferredChartCount ?? 1;
   const shouldKeepTable = (tableUnit?.requestedCount ?? 1) > 0;
   const metricCount = metricsUnit?.resolvedCount ?? 3;
@@ -604,9 +611,10 @@ export function createManualDataContract(page: Page, versionLabel: string, pageI
   );
   const chartExplanationPairs = Array.from({ length: preferredChartCount }, (_, index) => ({
     label: `图表说明单元 ${index + 1}`,
+    outcome: chartPairAssembly?.resolvedUnits?.[index]?.outcome,
     chartSlotLabel: `chart slot ${index + 1}`,
     explanationSlotLabel: `explanation slot ${index + 1}`,
-    slotBindings: chartPairUnit?.bindings?.[index]?.bindings ?? [],
+    slotBindings: chartPairAssembly?.resolvedUnits?.[index]?.slots ?? [],
   }));
   const sourceLines = ensureItems(
     [
@@ -636,6 +644,9 @@ export function createManualDataContract(page: Page, versionLabel: string, pageI
       requestedCount: chartPairUnit?.requestedCount ?? preferredChartCount,
       resolvedCount: chartPairUnit?.resolvedCount ?? preferredChartCount,
       filledCount: chartPairUnit?.filledCount ?? preferredChartCount,
+      partialCount: chartPairAssembly?.partialCount ?? 0,
+      unfilledCount: chartPairAssembly?.unfilledCount ?? 0,
+      fillRule: chartPairAssembly?.fillRule ?? chartPairUnit?.fillRule ?? "all-required-slots",
     },
     tableTitle: shouldKeepTable ? "手工填写数据表" : "摘要数据表",
     table: shouldKeepTable
@@ -659,6 +670,7 @@ export function createGeneratedCaseContract(page: Page, versionLabel: string, pa
   const effectiveIntent = pageIntent ?? createPageIntent(page);
   const effectivePlan = contentPlan ?? (effectiveIntent ? createPageContentPlan(page, effectiveIntent) : null);
   const imageTextUnit = effectivePlan?.units.find((unit) => unit.unitType === "imageTextPair");
+  const imageTextAssembly = imageTextUnit?.assembly;
   const sourceParagraphs = splitParagraphs(page.outlineText);
   const scenario = sourceParagraphs[0] || "案例页先建立对象与场景，让读者知道这页在讲谁、在什么背景下发生了什么。";
   const challenge =
@@ -680,9 +692,10 @@ export function createGeneratedCaseContract(page: Page, versionLabel: string, pa
   const pairCount = imageTextUnit?.resolvedCount ?? Math.max(1, effectiveIntent?.preferredImageCount ?? 1);
   const imageTextPairs = Array.from({ length: pairCount }, (_, index) => ({
     label: `图文单元 ${index + 1}`,
+    outcome: imageTextAssembly?.resolvedUnits?.[index]?.outcome,
     imageSlotLabel: `image slot ${index + 1}`,
     textSlotLabel: `text slot ${index + 1}`,
-    slotBindings: imageTextUnit?.bindings?.[index]?.bindings ?? [],
+    slotBindings: imageTextAssembly?.resolvedUnits?.[index]?.slots ?? [],
   }));
 
   return {
@@ -703,6 +716,9 @@ export function createGeneratedCaseContract(page: Page, versionLabel: string, pa
       requestedCount: imageTextUnit?.requestedCount ?? pairCount,
       resolvedCount: imageTextUnit?.resolvedCount ?? pairCount,
       filledCount: imageTextUnit?.filledCount ?? pairCount,
+      partialCount: imageTextAssembly?.partialCount ?? 0,
+      unfilledCount: imageTextAssembly?.unfilledCount ?? 0,
+      fillRule: imageTextAssembly?.fillRule ?? imageTextUnit?.fillRule ?? "all-required-slots",
     },
     outcomeMetrics: [
       {
@@ -761,6 +777,16 @@ export function createGeneratedSummaryContract(page: Page, versionLabel: string,
     ["收束页需要保留边界感，避免结论过满。"],
     2,
   );
+  const effectiveIntent = pageIntent ?? createPageIntent(page);
+  const effectivePlan = _contentPlan ?? (effectiveIntent ? createPageContentPlan(page, effectiveIntent) : null);
+  const textUnit = effectivePlan?.units.find((unit) => unit.unitType === "text");
+  const textAssembly = textUnit?.assembly;
+  const textUnits = Array.from({ length: textUnit?.resolvedCount ?? 0 }, (_, index) => ({
+    label: `收束文本单元 ${index + 1}`,
+    outcome: textAssembly?.resolvedUnits?.[index]?.outcome,
+    textSlotLabel: `text slot ${index + 1}`,
+    slotBindings: textAssembly?.resolvedUnits?.[index]?.slots ?? [],
+  }));
 
   return {
     sourceKind: "generated",
@@ -795,6 +821,15 @@ export function createGeneratedSummaryContract(page: Page, versionLabel: string,
         detail: "收束页保留边界提醒，但不回到完整风险展开页。",
       },
     ],
+    textUnits,
+    textUnitStatus: {
+      requestedCount: textUnit?.requestedCount ?? 0,
+      resolvedCount: textUnit?.resolvedCount ?? 0,
+      filledCount: textUnit?.filledCount ?? 0,
+      partialCount: textAssembly?.partialCount ?? 0,
+      unfilledCount: textAssembly?.unfilledCount ?? 0,
+      fillRule: textAssembly?.fillRule ?? textUnit?.fillRule ?? "all-required-slots",
+    },
   };
 }
 
@@ -839,6 +874,28 @@ export function fillContractToPageModel(contract: LayoutContract, variant = 0): 
                 id: createBlockId("overview-signal", index),
                 heading: item.heading,
                 detail: item.detail,
+              })),
+            },
+            {
+              id: "slots-1",
+              type: "content-slots",
+              title: "判断文本单元",
+              summary: {
+                unitType: "text",
+                requestedCount: contract.textUnitStatus.requestedCount,
+                resolvedCount: contract.textUnitStatus.resolvedCount,
+                filledCount: contract.textUnitStatus.filledCount,
+                partialCount: contract.textUnitStatus.partialCount,
+                unfilledCount: contract.textUnitStatus.unfilledCount,
+                fillRule: contract.textUnitStatus.fillRule,
+              },
+              items: contract.textUnits.map((item, index) => ({
+                id: createBlockId("overview-text-slot", index),
+                unitType: "text",
+                label: item.label,
+                outcome: item.outcome,
+                textSlotLabel: item.textSlotLabel,
+                slotBindings: item.slotBindings,
               })),
             },
             {
@@ -925,11 +982,15 @@ export function fillContractToPageModel(contract: LayoutContract, variant = 0): 
                 requestedCount: contract.imageTextPairStatus.requestedCount,
                 resolvedCount: contract.imageTextPairStatus.resolvedCount,
                 filledCount: contract.imageTextPairStatus.filledCount,
+                partialCount: contract.imageTextPairStatus.partialCount,
+                unfilledCount: contract.imageTextPairStatus.unfilledCount,
+                fillRule: contract.imageTextPairStatus.fillRule,
               },
               items: contract.imageTextPairs.map((item, index) => ({
                 id: createBlockId("case-slot", index),
                 unitType: "imageTextPair",
                 label: item.label,
+                outcome: item.outcome,
                 imageSlotLabel: item.imageSlotLabel,
                 textSlotLabel: item.textSlotLabel,
                 slotBindings: item.slotBindings,
@@ -1018,6 +1079,28 @@ export function fillContractToPageModel(contract: LayoutContract, variant = 0): 
               })),
             },
             {
+              id: "slots-1",
+              type: "content-slots",
+              title: "收束文本单元",
+              summary: {
+                unitType: "text",
+                requestedCount: contract.textUnitStatus.requestedCount,
+                resolvedCount: contract.textUnitStatus.resolvedCount,
+                filledCount: contract.textUnitStatus.filledCount,
+                partialCount: contract.textUnitStatus.partialCount,
+                unfilledCount: contract.textUnitStatus.unfilledCount,
+                fillRule: contract.textUnitStatus.fillRule,
+              },
+              items: contract.textUnits.map((item, index) => ({
+                id: createBlockId("summary-text-slot", index),
+                unitType: "text",
+                label: item.label,
+                outcome: item.outcome,
+                textSlotLabel: item.textSlotLabel,
+                slotBindings: item.slotBindings,
+              })),
+            },
+            {
               id: "list-1",
               type: "bullet-list",
               title: "后续建议 / Action Items",
@@ -1093,11 +1176,15 @@ export function fillContractToPageModel(contract: LayoutContract, variant = 0): 
               requestedCount: contract.chartExplanationPairStatus.requestedCount,
               resolvedCount: contract.chartExplanationPairStatus.resolvedCount,
               filledCount: contract.chartExplanationPairStatus.filledCount,
+              partialCount: contract.chartExplanationPairStatus.partialCount,
+              unfilledCount: contract.chartExplanationPairStatus.unfilledCount,
+              fillRule: contract.chartExplanationPairStatus.fillRule,
             },
             items: contract.chartExplanationPairs.map((item, index) => ({
               id: createBlockId("data-slot", index),
               unitType: "chartExplanationPair",
               label: item.label,
+              outcome: item.outcome,
               chartSlotLabel: item.chartSlotLabel,
               explanationSlotLabel: item.explanationSlotLabel,
               slotBindings: item.slotBindings,
@@ -1518,6 +1605,19 @@ function ContentSlotsBlock({
   const isDense = density === "compact" || block.items.length >= 3;
   const getSlotBinding = (item: typeof block.items[number], slotType: "image" | "text" | "chart" | "explanation") =>
     item.slotBindings?.find((binding) => binding.slotType === slotType);
+  const formatBoolean = (value: boolean) => (value ? "yes" : "no");
+  const formatOutcome = (outcome?: "filled" | "partial" | "unfilled") => {
+    switch (outcome) {
+      case "filled":
+        return "filled";
+      case "partial":
+        return "partial";
+      case "unfilled":
+        return "unfilled";
+      default:
+        return "unknown";
+    }
+  };
   const formatMissingReason = (reason?: string) => {
     switch (reason) {
       case "missing-image-source":
@@ -1552,30 +1652,78 @@ function ContentSlotsBlock({
         <div style={{ marginTop: 6, fontSize: isDense ? 10 : 11, lineHeight: 1.5, color: "#4b5563" }}>
           <span style={{ textTransform: "uppercase", letterSpacing: "0.12em", color: theme.accent }}>{block.summary.unitType}</span>
           <span>{` · requested ${block.summary.requestedCount} / resolved ${block.summary.resolvedCount} / filled ${block.summary.filledCount}`}</span>
+          <span>{` · partial ${block.summary.partialCount} / unfilled ${block.summary.unfilledCount}`}</span>
+          <span>{` · fill rule ${block.summary.fillRule}`}</span>
         </div>
       ) : null}
       <div style={{ display: "grid", gap: isDense ? 8 : 10, marginTop: 10, minHeight: 0 }}>
-        {block.items.map((item) => (
-          <div
-            key={item.id}
-            style={{
-              display: "grid",
-              gridTemplateColumns:
-                item.unitType === "chartExplanationPair"
-                  ? "minmax(0, 1.08fr) minmax(0, 0.92fr)"
-                  : "minmax(0, 0.92fr) minmax(0, 1.08fr)",
-              gap: isDense ? 8 : 10,
-              minWidth: 0,
-              borderRadius: 18,
-              background: theme.soft,
-              padding: isDense ? 8 : 10,
-            }}
-          >
-            {(() => {
-              const leftBinding = getSlotBinding(item, item.unitType === "chartExplanationPair" ? "chart" : "image");
-              const rightBinding = getSlotBinding(item, item.unitType === "chartExplanationPair" ? "explanation" : "text");
-              return (
-                <>
+        {block.items.map((item) => {
+          if (item.unitType === "text") {
+            const textBinding = getSlotBinding(item, "text");
+            return (
+              <div
+                key={item.id}
+                style={{
+                  minWidth: 0,
+                  borderRadius: 18,
+                  background: theme.soft,
+                  padding: isDense ? 8 : 10,
+                }}
+              >
+                <div
+                  style={{
+                    minWidth: 0,
+                    borderRadius: 14,
+                    minHeight: isDense ? 72 : 84,
+                    background: "white",
+                    border: `1px dashed ${theme.border}`,
+                    padding: isDense ? 8 : 10,
+                    boxSizing: "border-box",
+                    display: "grid",
+                    gridTemplateRows: "auto auto auto auto auto",
+                    gap: isDense ? 4 : 5,
+                  }}
+                >
+                  <div style={{ fontSize: isDense ? 9 : 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "#6b7280" }}>{item.label}</div>
+                  <div style={{ fontSize: isDense ? 9 : 10, letterSpacing: "0.12em", textTransform: "uppercase", color: theme.accent }}>{item.unitType}</div>
+                  <div style={{ fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: item.outcome === "filled" ? theme.accent : item.outcome === "partial" ? "#b45309" : "#6b7280", overflowWrap: "anywhere" }}>
+                    {`unit outcome · ${formatOutcome(item.outcome)}`}
+                  </div>
+                  <div style={{ fontSize: isDense ? 10 : 11, lineHeight: isDense ? 1.45 : 1.55, color: "#4b5563", overflowWrap: "anywhere" }}>
+                    {item.textSlotLabel ?? "text slot"}
+                  </div>
+                  <div style={{ fontSize: isDense ? 9 : 10, lineHeight: 1.4, color: textBinding?.source ? "#4b5563" : "#b45309", overflowWrap: "anywhere" }}>
+                    {textBinding?.source?.label ?? formatMissingReason(textBinding?.missingReason)}
+                  </div>
+                  <div style={{ fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: "#94a3b8", overflowWrap: "anywhere" }}>
+                    {textBinding?.slotId ?? "missing-slot-id"}
+                  </div>
+                  <div style={{ fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: "#6b7280", overflowWrap: "anywhere" }}>
+                    {`required ${formatBoolean(textBinding?.required ?? false)} · bound ${formatBoolean(textBinding?.bound ?? false)} · filled ${formatBoolean(textBinding?.filled ?? false)}`}
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          const leftBinding = getSlotBinding(item, item.unitType === "chartExplanationPair" ? "chart" : "image");
+          const rightBinding = getSlotBinding(item, item.unitType === "chartExplanationPair" ? "explanation" : "text");
+          return (
+            <div
+              key={item.id}
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  item.unitType === "chartExplanationPair"
+                    ? "minmax(0, 1.08fr) minmax(0, 0.92fr)"
+                    : "minmax(0, 0.92fr) minmax(0, 1.08fr)",
+                gap: isDense ? 8 : 10,
+                minWidth: 0,
+                borderRadius: 18,
+                background: theme.soft,
+                padding: isDense ? 8 : 10,
+              }}
+            >
             <div
               style={{
                 minWidth: 0,
@@ -1596,6 +1744,12 @@ function ContentSlotsBlock({
               <div style={{ marginTop: 6, fontSize: isDense ? 9 : 10, lineHeight: 1.4, color: leftBinding?.source ? "#4b5563" : "#b45309", textAlign: "center", overflowWrap: "anywhere" }}>
                 {leftBinding?.source?.label ?? formatMissingReason(leftBinding?.missingReason)}
               </div>
+              <div style={{ marginTop: 4, fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: "#94a3b8", textAlign: "center", overflowWrap: "anywhere" }}>
+                {leftBinding?.slotId ?? "missing-slot-id"}
+              </div>
+              <div style={{ marginTop: 4, fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: "#6b7280", textAlign: "center" }}>
+                {`required ${formatBoolean(leftBinding?.required ?? false)} · bound ${formatBoolean(leftBinding?.bound ?? false)} · filled ${formatBoolean(leftBinding?.filled ?? false)}`}
+              </div>
             </div>
             <div
               style={{
@@ -1607,24 +1761,31 @@ function ContentSlotsBlock({
                 padding: isDense ? 8 : 10,
                 boxSizing: "border-box",
                 display: "grid",
-                gridTemplateRows: "auto auto minmax(0, 1fr)",
-                gap: isDense ? 4 : 6,
+                gridTemplateRows: "auto auto auto auto auto",
+                gap: isDense ? 4 : 5,
               }}
             >
               <div style={{ fontSize: isDense ? 9 : 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "#6b7280" }}>{item.label}</div>
               <div style={{ fontSize: isDense ? 9 : 10, letterSpacing: "0.12em", textTransform: "uppercase", color: theme.accent }}>{item.unitType}</div>
+              <div style={{ fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: item.outcome === "filled" ? theme.accent : item.outcome === "partial" ? "#b45309" : "#6b7280", overflowWrap: "anywhere" }}>
+                {`unit outcome · ${formatOutcome(item.outcome)}`}
+              </div>
               <div style={{ fontSize: isDense ? 10 : 11, lineHeight: isDense ? 1.45 : 1.55, color: "#4b5563", overflowWrap: "anywhere" }}>
                 {item.explanationSlotLabel ?? item.textSlotLabel ?? "text slot"}
               </div>
               <div style={{ fontSize: isDense ? 9 : 10, lineHeight: 1.4, color: rightBinding?.source ? "#4b5563" : "#b45309", overflowWrap: "anywhere" }}>
                 {rightBinding?.source?.label ?? formatMissingReason(rightBinding?.missingReason)}
               </div>
+              <div style={{ fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: "#94a3b8", overflowWrap: "anywhere" }}>
+                {rightBinding?.slotId ?? "missing-slot-id"}
+              </div>
+              <div style={{ fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: "#6b7280", overflowWrap: "anywhere" }}>
+                {`required ${formatBoolean(rightBinding?.required ?? false)} · bound ${formatBoolean(rightBinding?.bound ?? false)} · filled ${formatBoolean(rightBinding?.filled ?? false)}`}
+              </div>
             </div>
-                </>
-              );
-            })()}
-          </div>
-        ))}
+            </div>
+          );
+        })}
       </div>
     </section>
   );
@@ -1681,7 +1842,33 @@ function getPageRenderDensity(pageModel: PageModel, mainBlocks: PageModelBlock[]
     return "compact";
   }
 
+  if ((pageModel.pageType === "overview" || pageModel.pageType === "summary") && slotCount >= 3) {
+    return "compact";
+  }
+
   return "regular";
+}
+
+function getOverviewMainColumnRows(mainBlocks: PageModelBlock[]) {
+  const slotsBlock = mainBlocks.find((block) => block.type === "content-slots");
+  const slotCount = slotsBlock?.type === "content-slots" ? slotsBlock.items.length : 0;
+
+  if (slotCount >= 3) {
+    return "minmax(0, 0.72fr) minmax(0, 0.52fr) minmax(0, 0.86fr)";
+  }
+
+  return "minmax(0, 0.84fr) minmax(0, 0.42fr) minmax(0, 0.74fr)";
+}
+
+function getOverviewAsideColumnRows(mainBlocks: PageModelBlock[]) {
+  const slotsBlock = mainBlocks.find((block) => block.type === "content-slots");
+  const slotCount = slotsBlock?.type === "content-slots" ? slotsBlock.items.length : 0;
+
+  if (slotCount >= 3) {
+    return "minmax(0, 0.56fr) minmax(0, 0.62fr) minmax(0, 0.82fr)";
+  }
+
+  return "minmax(0, 0.62fr) minmax(0, 0.68fr) minmax(0, 0.74fr)";
 }
 
 function getHeroLayout(pageType: PageModel["pageType"]): CSSProperties {
@@ -1809,6 +1996,28 @@ function getDataAsideColumnRows(mainBlocks: PageModelBlock[]) {
   return "minmax(0, 0.8fr) minmax(0, 0.62fr) minmax(0, 0.78fr)";
 }
 
+function getSummaryMainColumnRows(mainBlocks: PageModelBlock[]) {
+  const slotsBlock = mainBlocks.find((block) => block.type === "content-slots");
+  const slotCount = slotsBlock?.type === "content-slots" ? slotsBlock.items.length : 0;
+
+  if (slotCount >= 3) {
+    return "minmax(0, 0.82fr) minmax(0, 0.5fr) minmax(0, 0.68fr)";
+  }
+
+  return "minmax(0, 0.96fr) minmax(0, 0.4fr) minmax(0, 0.64fr)";
+}
+
+function getSummaryAsideColumnRows(mainBlocks: PageModelBlock[]) {
+  const slotsBlock = mainBlocks.find((block) => block.type === "content-slots");
+  const slotCount = slotsBlock?.type === "content-slots" ? slotsBlock.items.length : 0;
+
+  if (slotCount >= 3) {
+    return "minmax(0, 0.72fr) minmax(0, 0.56fr) minmax(0, 0.52fr)";
+  }
+
+  return "minmax(0, 0.8fr) minmax(0, 0.62fr) minmax(0, 0.58fr)";
+}
+
 export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
   const heroRegion = pageModel.regions.find((region) => region.name === "hero");
   const mainRegion = pageModel.regions.find((region) => region.name === "main");
@@ -1849,7 +2058,7 @@ export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
                 minHeight: 0,
                 minWidth: 0,
                 height: "100%",
-                gridTemplateRows: "minmax(0, 0.88fr) minmax(0, 1.12fr)",
+                gridTemplateRows: getOverviewMainColumnRows(mainBlocks),
               }}
             >
               {mainBlocks.map((block) => renderBlock(block, pageModel.theme, density))}
@@ -1861,7 +2070,7 @@ export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
                 minHeight: 0,
                 minWidth: 0,
                 height: "100%",
-                gridTemplateRows: "minmax(0, 0.62fr) minmax(0, 0.72fr) minmax(0, 0.96fr)",
+                gridTemplateRows: getOverviewAsideColumnRows(mainBlocks),
               }}
             >
               {asideBlocks.map((block) => renderBlock(block, pageModel.theme, density))}
@@ -1909,7 +2118,7 @@ export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
                 minHeight: 0,
                 minWidth: 0,
                 height: "100%",
-                gridTemplateRows: "minmax(0, 1.04fr) minmax(0, 0.96fr)",
+                gridTemplateRows: getSummaryMainColumnRows(mainBlocks),
               }}
             >
               {mainBlocks.map((block) => renderBlock(block, pageModel.theme, density))}
@@ -1921,7 +2130,7 @@ export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
                 minHeight: 0,
                 minWidth: 0,
                 height: "100%",
-                gridTemplateRows: "minmax(0, 0.8fr) minmax(0, 0.62fr) minmax(0, 0.58fr)",
+                gridTemplateRows: getSummaryAsideColumnRows(mainBlocks),
               }}
             >
               {asideBlocks.map((block) => renderBlock(block, pageModel.theme, density))}

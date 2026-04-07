@@ -13,9 +13,11 @@ export type PageContentUnitType =
   | "table"
   | "imageTextPair"
   | "chartExplanationPair";
+export type PageContentPolicyUnitType = Extract<PageContentUnitType, "imageTextPair" | "chartExplanationPair" | "text">;
 export type PageContentUnitRelation = "standalone" | "paired" | "grouped";
 export type PageContentSlotType = "image" | "text" | "chart" | "explanation";
 export type PageContentSourceKind = "image-source" | "text-source" | "chart-source" | "explanation-source";
+export type PageContentUnitOutcome = "filled" | "partial" | "unfilled";
 export type PageContentMissingReason =
   | "missing-image-source"
   | "missing-text-source"
@@ -48,15 +50,42 @@ export interface PageContentSourceRef {
 }
 
 export interface PageContentSlotBinding {
+  unitId: string;
+  slotId: string;
+  slotKey: string;
   slotType: PageContentSlotType;
+  required: boolean;
+  bound: boolean;
+  filled: boolean;
   source?: PageContentSourceRef;
   missingReason?: PageContentMissingReason;
+}
+
+export interface PageContentSlotPolicy {
+  slotType: PageContentSlotType;
+  required: boolean;
+  missingReason: PageContentMissingReason;
+}
+
+export interface PageContentUnitPolicy {
+  unitType: PageContentPolicyUnitType;
+  relation: PageContentUnitRelation;
+  fillRule: "all-required-slots";
+  slots: PageContentSlotPolicy[];
 }
 
 export interface PageContentUnitBinding {
   unitId: string;
   unitType: PageContentUnitType;
-  bindings: PageContentSlotBinding[];
+  outcome: PageContentUnitOutcome;
+  slots: PageContentSlotBinding[];
+}
+
+export interface PageContentPlanAssembly {
+  fillRule: "all-required-slots";
+  resolvedUnits: PageContentUnitBinding[];
+  partialCount: number;
+  unfilledCount: number;
 }
 
 export interface PageContentPlanUnit {
@@ -68,7 +97,8 @@ export interface PageContentPlanUnit {
   filledCount: number;
   required: boolean;
   allowDegrade: boolean;
-  bindings?: PageContentUnitBinding[];
+  fillRule: "all-required-slots";
+  assembly?: PageContentPlanAssembly;
 }
 
 export interface PageContentPlan {
@@ -165,11 +195,15 @@ export type PageModelBlock =
         requestedCount: number;
         resolvedCount: number;
         filledCount: number;
+        partialCount: number;
+        unfilledCount: number;
+        fillRule: "all-required-slots";
       };
       items: {
         id: string;
         unitType: PageContentUnitType;
         label: string;
+        outcome?: PageContentUnitOutcome;
         imageSlotLabel?: string;
         textSlotLabel?: string;
         chartSlotLabel?: string;
@@ -213,6 +247,20 @@ export interface GeneratedOverviewContractInput {
   signalMetrics: PageModelMetricItem[];
   viewpointCards: string[];
   supportPoints: string[];
+  textUnits: {
+    label: string;
+    outcome?: PageContentUnitOutcome;
+    textSlotLabel: string;
+    slotBindings: PageContentSlotBinding[];
+  }[];
+  textUnitStatus: {
+    requestedCount: number;
+    resolvedCount: number;
+    filledCount: number;
+    partialCount: number;
+    unfilledCount: number;
+    fillRule: "all-required-slots";
+  };
 }
 
 export interface ManualDataContractInput {
@@ -228,6 +276,7 @@ export interface ManualDataContractInput {
   chartSummary: string;
   chartExplanationPairs: {
     label: string;
+    outcome?: PageContentUnitOutcome;
     chartSlotLabel: string;
     explanationSlotLabel: string;
     slotBindings: PageContentSlotBinding[];
@@ -236,6 +285,9 @@ export interface ManualDataContractInput {
     requestedCount: number;
     resolvedCount: number;
     filledCount: number;
+    partialCount: number;
+    unfilledCount: number;
+    fillRule: "all-required-slots";
   };
   tableTitle: string;
   table: PageModelTableData;
@@ -260,6 +312,7 @@ export interface GeneratedCaseContractInput {
   visualCaption: string;
   imageTextPairs: {
     label: string;
+    outcome?: PageContentUnitOutcome;
     imageSlotLabel: string;
     textSlotLabel: string;
     slotBindings: PageContentSlotBinding[];
@@ -268,6 +321,9 @@ export interface GeneratedCaseContractInput {
     requestedCount: number;
     resolvedCount: number;
     filledCount: number;
+    partialCount: number;
+    unfilledCount: number;
+    fillRule: "all-required-slots";
   };
   outcomeMetrics: PageModelMetricItem[];
 }
@@ -287,6 +343,20 @@ export interface GeneratedSummaryContractInput {
   cautions: string[];
   closingNote: string;
   evidenceMetrics: PageModelMetricItem[];
+  textUnits: {
+    label: string;
+    outcome?: PageContentUnitOutcome;
+    textSlotLabel: string;
+    slotBindings: PageContentSlotBinding[];
+  }[];
+  textUnitStatus: {
+    requestedCount: number;
+    resolvedCount: number;
+    filledCount: number;
+    partialCount: number;
+    unfilledCount: number;
+    fillRule: "all-required-slots";
+  };
 }
 
 export type LayoutContract =

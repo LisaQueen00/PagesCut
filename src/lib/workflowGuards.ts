@@ -1,5 +1,5 @@
 import { isRenderablePreviewHtml, isValidTaskVersion } from "@/lib/versionValidation";
-import type { FinalComposition, FinalCompositionPage, HardEditPageDraft, PackagingPageCandidate, Page, PageVersion } from "@/types/domain";
+import type { EditedCompositionPageResult, FinalComposition, FinalCompositionPage, PackagingPageCandidate, Page, PageVersion } from "@/types/domain";
 
 export function canEnterCandidatesStage(contentPages: Page[]) {
   if (!contentPages.length) {
@@ -37,7 +37,7 @@ export function canEnterHardEditStage(
 export function canEnterExportStage(
   composition: FinalComposition | undefined,
   compositionPages: FinalCompositionPage[],
-  hardEditDrafts: HardEditPageDraft[],
+  editedResults: EditedCompositionPageResult[],
 ) {
   if (!composition) {
     return false;
@@ -47,8 +47,48 @@ export function canEnterExportStage(
     return false;
   }
 
+  const compositionPageMap = new Map(compositionPages.map((page) => [page.id, page] as const));
+  const editedResultMap = new Map(editedResults.map((result) => [result.compositionPageId, result] as const));
+
   return composition.orderedCompositionPageIds.every((compositionPageId) => {
-    const draft = hardEditDrafts.find((item) => item.compositionPageId === compositionPageId);
-    return Boolean(draft) && !draft?.isDirty;
+    const page = compositionPageMap.get(compositionPageId);
+    if (!page) {
+      return false;
+    }
+
+    return getCompositionPageResultSourceKind(page, editedResultMap.get(compositionPageId)) !== "unavailable";
   });
+}
+
+export function getCompositionPageResultSourceKind(
+  page: FinalCompositionPage,
+  editedResult?: EditedCompositionPageResult,
+): "edited-result" | "composition-default" | "unavailable" {
+  if (editedResult?.compositionPageId === page.id) {
+    if (page.pageKind === "content" && editedResult.editedPageModel) {
+      return "edited-result";
+    }
+
+    if (page.pageKind === "packaging" && editedResult.editedPackagingPage) {
+      return "edited-result";
+    }
+
+    if (isRenderablePreviewHtml(editedResult.previewHtml)) {
+      return "edited-result";
+    }
+  }
+
+  if (page.pageKind === "content" && page.sourcePageModel) {
+    return "composition-default";
+  }
+
+  if (page.pageKind === "packaging" && page.sourcePackagingPage) {
+    return "composition-default";
+  }
+
+  if (isRenderablePreviewHtml(page.previewHtml)) {
+    return "composition-default";
+  }
+
+  return "unavailable";
 }

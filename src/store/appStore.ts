@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { renderPackagingFormalToHtml } from "@/lib/packagingFormal";
+import { renderPageModelToHtml } from "@/lib/pageModel";
 import { generatePdfFromFinalComposition } from "@/lib/pdfExport";
 import { isValidTaskVersion } from "@/lib/versionValidation";
 import { canEnterCandidatesStage, canEnterExportStage, canEnterHardEditStage, canEnterPackagingStage } from "@/lib/workflowGuards";
@@ -13,12 +15,16 @@ import {
   getMockVersionStrategySummary,
 } from "@/mocks/data";
 import { services } from "@/services";
+import type { PageModel } from "@/types/pageModel";
 import type {
   Asset,
+  EditedCompositionPageResult,
   FinalComposition,
   FinalCompositionPage,
+  HardEditEditableElement,
   HardEditPageDraft,
   PackagingPageCandidate,
+  PackagingPageFormal,
   Page,
   PageVersion,
   Project,
@@ -39,6 +45,7 @@ interface AppState {
   finalCompositions: FinalComposition[];
   finalCompositionPages: FinalCompositionPage[];
   hardEditDrafts: HardEditPageDraft[];
+  editedCompositionPageResults: EditedCompositionPageResult[];
   assets: Asset[];
   activeTaskId: string | null;
   isBootstrapped: boolean;
@@ -108,6 +115,10 @@ function createCompositionId() {
 
 function createCompositionPageId() {
   return `composition-page-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createPackagingFormalPageId() {
+  return `packaging-formal-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function createAssetId() {
@@ -244,8 +255,15 @@ function normalizePackagingPageCandidate(candidate: PackagingPageCandidate): Pac
 function normalizeFinalComposition(composition: FinalComposition): FinalComposition {
   return {
     ...composition,
+    contentPageIds: Array.isArray(composition.contentPageIds) ? composition.contentPageIds : [],
     packagingPageIds: Array.isArray(composition.packagingPageIds) ? composition.packagingPageIds : [],
+    frontSourcePageIds: Array.isArray(composition.frontSourcePageIds) ? composition.frontSourcePageIds : [],
+    contentSourcePageIds: Array.isArray(composition.contentSourcePageIds) ? composition.contentSourcePageIds : [],
+    rearSourcePageIds: Array.isArray(composition.rearSourcePageIds) ? composition.rearSourcePageIds : [],
+    orderedSourcePageIds: Array.isArray(composition.orderedSourcePageIds) ? composition.orderedSourcePageIds : [],
     approvedPackagingCandidateIds: Array.isArray(composition.approvedPackagingCandidateIds) ? composition.approvedPackagingCandidateIds : [],
+    frontApprovedPackagingCandidateIds: Array.isArray(composition.frontApprovedPackagingCandidateIds) ? composition.frontApprovedPackagingCandidateIds : [],
+    rearApprovedPackagingCandidateIds: Array.isArray(composition.rearApprovedPackagingCandidateIds) ? composition.rearApprovedPackagingCandidateIds : [],
     frontCompositionPageIds: Array.isArray(composition.frontCompositionPageIds) ? composition.frontCompositionPageIds : [],
     contentCompositionPageIds: Array.isArray(composition.contentCompositionPageIds) ? composition.contentCompositionPageIds : [],
     rearCompositionPageIds: Array.isArray(composition.rearCompositionPageIds) ? composition.rearCompositionPageIds : [],
@@ -260,12 +278,37 @@ function normalizeFinalCompositionPage(page: FinalCompositionPage): FinalComposi
     ...page,
     createdAt: typeof page.createdAt === "string" ? page.createdAt : new Date().toISOString(),
     previewHtml: typeof page.previewHtml === "string" ? page.previewHtml : "",
+    sourcePackagingCandidateId: typeof page.sourcePackagingCandidateId === "string" ? page.sourcePackagingCandidateId : undefined,
+    sourcePackaging: page.sourcePackaging && typeof page.sourcePackaging === "object" ? page.sourcePackaging : undefined,
+    sourcePackagingPageId: typeof page.sourcePackagingPageId === "string" ? page.sourcePackagingPageId : undefined,
+    sourcePackagingPage: page.sourcePackagingPage && typeof page.sourcePackagingPage === "object" ? page.sourcePackagingPage : undefined,
+    sourcePageModel:
+      page.sourcePageModel && typeof page.sourcePageModel === "object" ? page.sourcePageModel : undefined,
   };
 }
 
 function normalizeHardEditDraft(draft: HardEditPageDraft): HardEditPageDraft {
+  const editableElements =
+    Array.isArray(draft.editableElements) && draft.editableElements.length
+      ? draft.editableElements
+      : [
+          createEditableElement("hero-title", "标题", "hero-title", "legacy:title", draft.title ?? "", false),
+          createEditableElement("hero-summary", "副标题 / 摘要", "hero-summary", "legacy:subtitle", draft.subtitle ?? "", true),
+          createEditableElement("legacy-body", "正文", "rich-text", "legacy:body", draft.bodyText ?? "", true),
+          createEditableElement("visual-caption", "图片说明", "visual-caption", "legacy:image-caption", draft.imageCaption ?? "", true),
+          createEditableElement("chart-title", "图表说明", "chart-title", "legacy:chart-caption", draft.chartCaption ?? "", true),
+          createEditableElement("packaging-footer", "页尾备注", "packaging-footer", "legacy:footer", draft.footerNote ?? "", true),
+        ];
+
   return {
     ...draft,
+    sourceObjectKind:
+      draft.sourceObjectKind === "content-page-model" ||
+      draft.sourceObjectKind === "packaging-formal-page" ||
+      draft.sourceObjectKind === "legacy-source-page"
+        ? draft.sourceObjectKind
+        : "legacy-source-page",
+    editableElements,
     lastSavedAt: typeof draft.lastSavedAt === "string" ? draft.lastSavedAt : new Date().toISOString(),
   };
 }
@@ -284,7 +327,31 @@ function normalizeAsset(asset: Asset): Asset {
     fileSizeBytes: typeof asset.fileSizeBytes === "number" ? asset.fileSizeBytes : 0,
     readyAt: typeof asset.readyAt === "string" ? asset.readyAt : null,
     errorMessage: typeof asset.errorMessage === "string" ? asset.errorMessage : "",
+    resultSourceKind:
+      asset.resultSourceKind === "edited-result" ||
+      asset.resultSourceKind === "composition-default" ||
+      asset.resultSourceKind === "legacy-fallback"
+        ? asset.resultSourceKind
+        : "composition-default",
+    editedPageCount: typeof asset.editedPageCount === "number" ? asset.editedPageCount : 0,
     status: asset.status ?? "completed",
+  };
+}
+
+function normalizeEditedCompositionPageResult(result: EditedCompositionPageResult): EditedCompositionPageResult {
+  return {
+    ...result,
+    sourceObjectKind:
+      result.sourceObjectKind === "content-page-model" ||
+      result.sourceObjectKind === "packaging-formal-page" ||
+      result.sourceObjectKind === "legacy-source-page"
+        ? result.sourceObjectKind
+        : "legacy-source-page",
+    editableElements: Array.isArray(result.editableElements) ? result.editableElements : [],
+    editedPageModel: result.editedPageModel,
+    editedPackagingPage: result.editedPackagingPage,
+    previewHtml: typeof result.previewHtml === "string" ? result.previewHtml : "",
+    updatedAt: typeof result.updatedAt === "string" ? result.updatedAt : new Date().toISOString(),
   };
 }
 
@@ -460,6 +527,460 @@ function createInitialPackagingCandidates(pages: Page[], contentPages: Page[], a
   }));
 }
 
+function collectPageModelTextParagraphs(pageModel: PageModel | undefined) {
+  if (!pageModel) {
+    return [];
+  }
+
+  const paragraphs: string[] = [];
+  pageModel.regions.forEach((region: PageModel["regions"][number]) => {
+    region.blocks.forEach((block: PageModel["regions"][number]["blocks"][number]) => {
+      if (block.type === "rich-text") {
+        paragraphs.push(...block.paragraphs);
+      } else if (block.type === "callout") {
+        paragraphs.push(block.body);
+      } else if (block.type === "bullet-list") {
+        paragraphs.push(...block.items);
+      } else if (block.type === "signal-list") {
+        paragraphs.push(...block.items.map((item: { heading: string; detail: string }) => `${item.heading}：${item.detail}`));
+      }
+    });
+  });
+
+  return paragraphs.filter(Boolean);
+}
+
+function splitEditableLines(value: string) {
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function createEditableElement(
+  id: string,
+  label: string,
+  kind: HardEditEditableElement["kind"],
+  sourcePath: string,
+  value: string,
+  multiline: boolean,
+): HardEditEditableElement {
+  return {
+    id,
+    label,
+    kind,
+    sourcePath,
+    value,
+    multiline,
+  };
+}
+
+function getElementValue(elements: HardEditEditableElement[], id: string, fallback = "") {
+  return elements.find((element) => element.id === id)?.value ?? fallback;
+}
+
+function summarizeDraftFieldsFromElements(elements: HardEditEditableElement[], fallback: Omit<HardEditPageDraft, "id" | "taskId" | "compositionId" | "compositionPageId" | "sourcePageId" | "sourceVersionId" | "sourceObjectKind" | "sourcePreviewHtml" | "editableElements" | "isDirty" | "lastSavedAt">) {
+  return {
+    title:
+      getElementValue(elements, "packaging-title") ||
+      getElementValue(elements, "hero-title") ||
+      fallback.title,
+    subtitle:
+      getElementValue(elements, "packaging-subtitle") ||
+      getElementValue(elements, "hero-summary") ||
+      fallback.subtitle,
+    bodyText:
+      getElementValue(elements, "packaging-hero") ||
+      getElementValue(elements, "packaging-guidance") ||
+      getElementValue(elements, "packaging-toc-entries") ||
+      elements.find((element) => element.kind === "rich-text" || element.kind === "callout-body" || element.kind === "bullet-list")?.value ||
+      fallback.bodyText,
+    imageCaption: getElementValue(elements, "visual-caption", fallback.imageCaption),
+    chartCaption: getElementValue(elements, "chart-title", fallback.chartCaption),
+    footerNote: getElementValue(elements, "packaging-footer", fallback.footerNote),
+  };
+}
+
+function createContentEditableElements(compositionPage: FinalCompositionPage, sourcePage: Page | undefined) {
+  const sourcePageModel = compositionPage.sourcePageModel;
+  if (!sourcePageModel) {
+    const seed = createContentDraftSeed(compositionPage, sourcePage);
+    return {
+      sourceObjectKind: "legacy-source-page" as const,
+      elements: [
+        createEditableElement("hero-title", "标题", "hero-title", "legacy:title", seed.title, false),
+        createEditableElement("hero-summary", "副标题 / 摘要", "hero-summary", "legacy:subtitle", seed.subtitle, true),
+        createEditableElement("legacy-body", "正文", "rich-text", "legacy:body", seed.bodyText, true),
+        createEditableElement("visual-caption", "图片说明", "visual-caption", "legacy:image-caption", seed.imageCaption, true),
+        createEditableElement("chart-title", "图表说明", "chart-title", "legacy:chart-caption", seed.chartCaption, true),
+        createEditableElement("packaging-footer", "页尾备注", "packaging-footer", "legacy:footer", seed.footerNote, true),
+      ],
+      fallback: seed,
+    };
+  }
+
+  const elements: HardEditEditableElement[] = [];
+  sourcePageModel.regions.forEach((region) => {
+    region.blocks.forEach((block) => {
+      if (block.type === "hero") {
+        elements.push(createEditableElement("hero-title", "标题", "hero-title", `block:${block.id}:title`, block.title, false));
+        elements.push(createEditableElement("hero-summary", "副标题 / 摘要", "hero-summary", `block:${block.id}:summary`, block.summary, true));
+      } else if (block.type === "rich-text") {
+        elements.push(createEditableElement(`rich-text:${block.id}`, block.title || "正文", "rich-text", `block:${block.id}:paragraphs`, block.paragraphs.join("\n\n"), true));
+      } else if (block.type === "callout") {
+        elements.push(createEditableElement(`callout:${block.id}`, block.title || "说明块", "callout-body", `block:${block.id}:body`, block.body, true));
+      } else if (block.type === "bullet-list") {
+        elements.push(createEditableElement(`bullet-list:${block.id}`, block.title || "列表", "bullet-list", `block:${block.id}:items`, block.items.join("\n"), true));
+      } else if (block.type === "visual") {
+        elements.push(createEditableElement("visual-caption", block.title || "视觉说明", "visual-caption", `block:${block.id}:caption`, block.caption, true));
+        elements.push(createEditableElement("visual-kicker", "视觉前导", "visual-kicker", `block:${block.id}:kicker`, block.kicker, false));
+      } else if (block.type === "chart") {
+        elements.push(createEditableElement("chart-title", block.title || "图表标题", "chart-title", `block:${block.id}:title`, block.title, false));
+      }
+    });
+  });
+
+  const seed = createContentDraftSeed(compositionPage, sourcePage);
+
+  return {
+    sourceObjectKind: "content-page-model" as const,
+    elements,
+    fallback: seed,
+  };
+}
+
+function createPackagingEditableElements(compositionPage: FinalCompositionPage, sourcePage: Page | undefined, allContentPages: Page[]) {
+  const sourcePackagingPage = compositionPage.sourcePackagingPage;
+
+  if (compositionPage.pageRole === "cover") {
+    const fallback = {
+      sourceObjectKind: "packaging-formal-page" as const,
+      title: sourcePackagingPage?.title ?? sourcePage?.coverMeta?.title ?? sourcePage?.pageType ?? compositionPage.pageType,
+      subtitle: sourcePackagingPage?.subtitle ?? sourcePage?.coverMeta?.subtitle ?? "",
+      bodyText: sourcePackagingPage?.heroLabel ?? sourcePage?.coverMeta?.heroLabel ?? "",
+      imageCaption: "",
+      chartCaption: "",
+      footerNote: sourcePackagingPage?.footerNote ?? `${sourcePage?.coverMeta?.issueLabel ?? ""} · ${sourcePage?.coverMeta?.brandLabel ?? ""}`.trim(),
+    };
+
+    return {
+      sourceObjectKind: "packaging-formal-page" as const,
+      elements: [
+        createEditableElement("packaging-title", "封面标题", "packaging-title", "formal:title", fallback.title, false),
+        createEditableElement("packaging-subtitle", "封面副标题", "packaging-subtitle", "formal:subtitle", fallback.subtitle, true),
+        createEditableElement("packaging-kicker", "刊头 / Kicker", "packaging-kicker", "formal:kicker", sourcePackagingPage?.kicker ?? sourcePage?.coverMeta?.kicker ?? "", false),
+        createEditableElement("packaging-hero", "主视觉文案", "packaging-hero", "formal:heroLabel", fallback.bodyText, true),
+        createEditableElement("packaging-footer", "页尾信息", "packaging-footer", "formal:footerNote", fallback.footerNote, true),
+      ],
+      fallback,
+    };
+  }
+
+  const contentEntries = sourcePackagingPage?.tocEntries?.join("\n") ?? allContentPages
+    .slice()
+    .sort((a, b) => a.index - b.index)
+    .map((page, index) => `${index + 1}. ${page.pageType}`)
+    .join("\n");
+
+  const fallback = {
+    sourceObjectKind: "packaging-formal-page" as const,
+    title: sourcePackagingPage?.title ?? compositionPage.pageType,
+    subtitle: sourcePackagingPage?.subtitle ?? "目录组织与阅读导航",
+    bodyText: contentEntries,
+    imageCaption: "",
+    chartCaption: "",
+    footerNote: sourcePackagingPage?.footerNote ?? "目录页可在硬编辑阶段继续微调标题和顺序表达。",
+  };
+
+  return {
+    sourceObjectKind: "packaging-formal-page" as const,
+    elements: [
+      createEditableElement("packaging-title", "目录标题", "packaging-title", "formal:title", fallback.title, false),
+      createEditableElement("packaging-subtitle", "目录副标题", "packaging-subtitle", "formal:subtitle", fallback.subtitle, true),
+      createEditableElement("packaging-toc-entries", "目录条目", "packaging-guidance", "formal:tocEntries", fallback.bodyText, true),
+      createEditableElement("packaging-guidance", "阅读提示", "packaging-guidance", "formal:guidanceNote", sourcePackagingPage?.guidanceNote ?? "", true),
+      createEditableElement("packaging-footer", "页尾备注", "packaging-footer", "formal:footerNote", fallback.footerNote, true),
+    ],
+    fallback,
+  };
+}
+
+function applyEditableElementsToPageModel(sourcePageModel: PageModel, elements: HardEditEditableElement[]) {
+  const valueMap = new Map(elements.map((element) => [element.sourcePath, element.value] as const));
+
+  return {
+    ...sourcePageModel,
+    regions: sourcePageModel.regions.map((region) => ({
+      ...region,
+      blocks: region.blocks.map((block) => {
+        if (block.type === "hero") {
+          return {
+            ...block,
+            title: valueMap.get(`block:${block.id}:title`) ?? block.title,
+            summary: valueMap.get(`block:${block.id}:summary`) ?? block.summary,
+          };
+        }
+        if (block.type === "rich-text") {
+          return {
+            ...block,
+            paragraphs: splitEditableLines(valueMap.get(`block:${block.id}:paragraphs`) ?? block.paragraphs.join("\n\n")),
+          };
+        }
+        if (block.type === "callout") {
+          return {
+            ...block,
+            body: valueMap.get(`block:${block.id}:body`) ?? block.body,
+          };
+        }
+        if (block.type === "bullet-list") {
+          return {
+            ...block,
+            items: splitEditableLines(valueMap.get(`block:${block.id}:items`) ?? block.items.join("\n")),
+          };
+        }
+        if (block.type === "visual") {
+          return {
+            ...block,
+            caption: valueMap.get(`block:${block.id}:caption`) ?? block.caption,
+            kicker: valueMap.get(`block:${block.id}:kicker`) ?? block.kicker,
+          };
+        }
+        if (block.type === "chart") {
+          return {
+            ...block,
+            title: valueMap.get(`block:${block.id}:title`) ?? block.title,
+          };
+        }
+        return block;
+      }),
+    })),
+  };
+}
+
+function applyEditableElementsToPackagingFormal(
+  pageRole: FinalCompositionPage["pageRole"],
+  compositionPage: FinalCompositionPage,
+  elements: HardEditEditableElement[],
+  sourcePage: Page | undefined,
+): PackagingPageFormal | null {
+  const sourceFormal = compositionPage.sourcePackagingPage;
+  if (!sourceFormal && pageRole !== "cover" && pageRole !== "toc") {
+    return null;
+  }
+
+  const valueMap = new Map(elements.map((element) => [element.sourcePath, element.value] as const));
+  if (pageRole === "cover") {
+    const base = sourceFormal ?? {
+      id: `legacy-packaging-${compositionPage.id}`,
+      taskId: compositionPage.taskId,
+      pageId: compositionPage.sourcePageId,
+      pageRole: "cover" as const,
+      pageType: compositionPage.pageType,
+      pageBucket: "front" as const,
+      sourceCandidateId: compositionPage.sourcePackagingCandidateId ?? compositionPage.sourceVersionId,
+      basedOnContentVersionId: compositionPage.sourceVersionId,
+      candidateLabel: compositionPage.pageType,
+      promptNote: "",
+      summary: "",
+      title: sourcePage?.coverMeta?.title ?? compositionPage.pageType,
+      subtitle: sourcePage?.coverMeta?.subtitle ?? "",
+      footerNote: `${sourcePage?.coverMeta?.issueLabel ?? ""} · ${sourcePage?.coverMeta?.brandLabel ?? ""}`.trim(),
+      kicker: sourcePage?.coverMeta?.kicker ?? "",
+      heroLabel: sourcePage?.coverMeta?.heroLabel ?? "",
+      issueLabel: sourcePage?.coverMeta?.issueLabel ?? "",
+      brandLabel: sourcePage?.coverMeta?.brandLabel ?? "",
+    };
+
+    return {
+      ...base,
+      title: valueMap.get("formal:title") ?? base.title,
+      subtitle: valueMap.get("formal:subtitle") ?? base.subtitle,
+      kicker: valueMap.get("formal:kicker") ?? base.kicker,
+      heroLabel: valueMap.get("formal:heroLabel") ?? base.heroLabel,
+      footerNote: valueMap.get("formal:footerNote") ?? base.footerNote,
+    };
+  }
+
+  const base = sourceFormal ?? {
+    id: `legacy-packaging-${compositionPage.id}`,
+    taskId: compositionPage.taskId,
+    pageId: compositionPage.sourcePageId,
+    pageRole: "toc" as const,
+    pageType: compositionPage.pageType,
+    pageBucket: "front" as const,
+    sourceCandidateId: compositionPage.sourcePackagingCandidateId ?? compositionPage.sourceVersionId,
+    basedOnContentVersionId: compositionPage.sourceVersionId,
+    candidateLabel: compositionPage.pageType,
+    promptNote: "",
+    summary: "",
+    title: compositionPage.pageType,
+    subtitle: "目录组织与阅读导航",
+    footerNote: "目录页可在硬编辑阶段继续微调标题和顺序表达。",
+    tocEntries: splitEditableLines(valueMap.get("formal:tocEntries") ?? ""),
+    guidanceNote: valueMap.get("formal:guidanceNote") ?? "",
+  };
+
+  return {
+    ...base,
+    title: valueMap.get("formal:title") ?? base.title,
+    subtitle: valueMap.get("formal:subtitle") ?? base.subtitle,
+    tocEntries: splitEditableLines(valueMap.get("formal:tocEntries") ?? (base.tocEntries ?? []).join("\n")),
+    guidanceNote: valueMap.get("formal:guidanceNote") ?? base.guidanceNote,
+    footerNote: valueMap.get("formal:footerNote") ?? base.footerNote,
+  };
+}
+
+function createContentDraftSeed(compositionPage: FinalCompositionPage, sourcePage: Page | undefined) {
+  const sourcePageModel = compositionPage.sourcePageModel;
+  const blocks = sourcePageModel?.regions.flatMap((region) => region.blocks) ?? [];
+  const heroBlock = blocks.find((block) => block.type === "hero");
+  const visualBlock = blocks.find((block) => block.type === "visual");
+  const chartBlock = blocks.find((block) => block.type === "chart");
+  const paragraphs = collectPageModelTextParagraphs(sourcePageModel);
+  const imageBlock = sourcePage?.userProvidedContentBlocks.find((block) => block.type === "image");
+  const chartDescBlock = sourcePage?.userProvidedContentBlocks.find((block) => block.type === "chart_desc");
+
+  return {
+    sourceObjectKind: sourcePageModel ? ("content-page-model" as const) : ("legacy-source-page" as const),
+    title: heroBlock?.title ?? sourcePage?.pageType ?? compositionPage.pageType,
+    subtitle: heroBlock?.summary ?? sourcePage?.styleText ?? "",
+    bodyText: paragraphs[0] ?? sourcePage?.outlineText ?? "",
+    imageCaption: visualBlock?.caption ?? (imageBlock?.type === "image" ? imageBlock.caption : ""),
+    chartCaption: chartBlock?.title ?? (chartDescBlock?.type === "chart_desc" ? chartDescBlock.description : ""),
+    footerNote: paragraphs[1] ?? sourcePage?.userConstraints ?? "",
+  };
+}
+
+function createEditedCompositionPageResultFromDraft(
+  compositionPage: FinalCompositionPage,
+  draft: HardEditPageDraft,
+  sourcePage: Page | undefined,
+): EditedCompositionPageResult {
+  const now = new Date().toISOString();
+  let previewHtml = compositionPage.previewHtml;
+  let sourceObjectKind = draft.sourceObjectKind;
+  let editedPageModel: PageModel | undefined;
+  let editedPackagingPage: PackagingPageFormal | undefined;
+
+  if (compositionPage.pageKind === "content" && compositionPage.sourcePageModel) {
+    editedPageModel = applyEditableElementsToPageModel(compositionPage.sourcePageModel, draft.editableElements);
+    previewHtml = renderPageModelToHtml(editedPageModel);
+    sourceObjectKind = "content-page-model";
+  } else if (compositionPage.pageKind === "packaging" && (compositionPage.pageRole === "cover" || compositionPage.pageRole === "toc")) {
+    const nextPackagingPage = applyEditableElementsToPackagingFormal(compositionPage.pageRole, compositionPage, draft.editableElements, sourcePage);
+    if (nextPackagingPage) {
+      editedPackagingPage = nextPackagingPage;
+      previewHtml = renderPackagingFormalToHtml(compositionPage.pageRole, editedPackagingPage);
+      sourceObjectKind = "packaging-formal-page";
+    }
+  }
+
+  return normalizeEditedCompositionPageResult({
+    id: `edited-result-${compositionPage.id}`,
+    taskId: compositionPage.taskId,
+    compositionId: compositionPage.compositionId,
+    compositionPageId: compositionPage.id,
+    sourcePageId: compositionPage.sourcePageId,
+    sourceVersionId: compositionPage.sourceVersionId,
+    sourceObjectKind,
+    editableElements: draft.editableElements,
+    title: draft.title,
+    subtitle: draft.subtitle,
+    bodyText: draft.bodyText,
+    imageCaption: draft.imageCaption,
+    chartCaption: draft.chartCaption,
+    footerNote: draft.footerNote,
+    editedPageModel,
+    editedPackagingPage,
+    previewHtml,
+    updatedAt: now,
+  });
+}
+
+function createEditedResultFromCompositionFallback(
+  compositionPage: FinalCompositionPage,
+): EditedCompositionPageResult {
+  const sourcePackagingPage = compositionPage.sourcePackagingPage;
+  const sourcePageModel = compositionPage.sourcePageModel;
+  const blocks = sourcePageModel?.regions.flatMap((region) => region.blocks) ?? [];
+  const heroBlock = blocks.find((block) => block.type === "hero");
+  const visualBlock = blocks.find((block) => block.type === "visual");
+  const chartBlock = blocks.find((block) => block.type === "chart");
+  const paragraphs = collectPageModelTextParagraphs(sourcePageModel);
+  const now = new Date().toISOString();
+
+  if (compositionPage.pageRole === "cover") {
+    const previewHtml = sourcePackagingPage ? renderPackagingFormalToHtml(compositionPage.pageRole, sourcePackagingPage) : compositionPage.previewHtml;
+    const editableElements = createPackagingEditableElements(compositionPage, undefined, []).elements;
+    return normalizeEditedCompositionPageResult({
+      id: `composition-default-${compositionPage.id}`,
+      taskId: compositionPage.taskId,
+      compositionId: compositionPage.compositionId,
+      compositionPageId: compositionPage.id,
+      sourcePageId: compositionPage.sourcePageId,
+      sourceVersionId: compositionPage.sourceVersionId,
+      sourceObjectKind: sourcePackagingPage ? "packaging-formal-page" : "legacy-source-page",
+      editableElements,
+      title: sourcePackagingPage?.title ?? compositionPage.pageType,
+      subtitle: sourcePackagingPage?.subtitle ?? "",
+      bodyText: sourcePackagingPage?.heroLabel ?? "",
+      imageCaption: "主视觉区域说明",
+      chartCaption: "",
+      footerNote: sourcePackagingPage?.footerNote ?? "",
+      editedPackagingPage: sourcePackagingPage,
+      previewHtml,
+      updatedAt: now,
+    });
+  }
+
+  if (compositionPage.pageRole === "toc") {
+    const previewHtml = sourcePackagingPage ? renderPackagingFormalToHtml(compositionPage.pageRole, sourcePackagingPage) : compositionPage.previewHtml;
+    const editableElements = createPackagingEditableElements(compositionPage, undefined, []).elements;
+    return normalizeEditedCompositionPageResult({
+      id: `composition-default-${compositionPage.id}`,
+      taskId: compositionPage.taskId,
+      compositionId: compositionPage.compositionId,
+      compositionPageId: compositionPage.id,
+      sourcePageId: compositionPage.sourcePageId,
+      sourceVersionId: compositionPage.sourceVersionId,
+      sourceObjectKind: sourcePackagingPage ? "packaging-formal-page" : "legacy-source-page",
+      editableElements,
+      title: sourcePackagingPage?.title ?? compositionPage.pageType,
+      subtitle: sourcePackagingPage?.subtitle ?? "目录组织与阅读导航",
+      bodyText: sourcePackagingPage?.tocEntries?.join("\n") ?? "",
+      imageCaption: "",
+      chartCaption: "",
+      footerNote: sourcePackagingPage?.footerNote ?? "",
+      editedPackagingPage: sourcePackagingPage,
+      previewHtml,
+      updatedAt: now,
+    });
+  }
+
+  const sourcePage = undefined;
+  const editableElements = compositionPage.sourcePageModel ? createContentEditableElements(compositionPage, sourcePage).elements : [];
+  const previewHtml = sourcePageModel ? renderPageModelToHtml(sourcePageModel) : compositionPage.previewHtml;
+  return normalizeEditedCompositionPageResult({
+    id: `composition-default-${compositionPage.id}`,
+    taskId: compositionPage.taskId,
+    compositionId: compositionPage.compositionId,
+    compositionPageId: compositionPage.id,
+    sourcePageId: compositionPage.sourcePageId,
+    sourceVersionId: compositionPage.sourceVersionId,
+    sourceObjectKind: sourcePageModel ? "content-page-model" : "legacy-source-page",
+    editableElements,
+    title: heroBlock?.title ?? compositionPage.pageType,
+    subtitle: heroBlock?.summary ?? "",
+    bodyText: paragraphs[0] ?? "",
+    imageCaption: visualBlock?.caption ?? "",
+    chartCaption: chartBlock?.title ?? "",
+    footerNote: paragraphs[1] ?? "",
+    editedPageModel: sourcePageModel,
+    previewHtml,
+    updatedAt: now,
+  });
+}
+
 function createFinalComposition(
   taskId: string,
   contentPages: Page[],
@@ -485,33 +1006,133 @@ function createFinalComposition(
       .filter((candidate) => candidate.isApproved)
       .map((candidate) => [candidate.pageId, candidate] as const),
   );
+  const contentPageModelMap = new Map(
+    Object.entries(approvedVersion.pageModelsByPageId ?? {}).map(([pageId, pageModel]) => [pageId, pageModel] as const),
+  );
+  const orderedContentPages = contentPages.slice().sort((a, b) => a.index - b.index);
+  const packagingFormalPageMap = new Map<string, PackagingPageFormal | undefined>();
+  packagingPages.forEach((page) => {
+    const candidate = approvedPackagingCandidateMap.get(page.id);
+    if (!candidate || (page.pageRole !== "cover" && page.pageRole !== "toc")) {
+      packagingFormalPageMap.set(page.id, undefined);
+      return;
+    }
 
-  const compositionPages = orderedSourcePages.map((page, index) => ({
-    id: createCompositionPageId(),
-    compositionId,
-    taskId,
-    sourcePageId: page.id,
-    sourceKind: page.pageKind === "content" ? "content-page" : "packaging-page",
-    sourceVersionId: page.pageKind === "content" ? approvedVersion.id : approvedPackagingCandidateMap.get(page.id)?.id ?? approvedVersion.id,
-    pageKind: page.pageKind,
-    pageRole: page.pageRole,
-    pageType: page.pageType,
-    pageBucket: page.pageKind === "content" ? "content" : page.pageRole === "cover" || page.pageRole === "toc" ? "front" : "rear",
-    orderIndex: index + 1,
-    previewHtml: page.pageKind === "content" ? approvedVersion.previewsByPageId[page.id] ?? "" : approvedPackagingCandidateMap.get(page.id)?.previewHtml ?? "",
-    createdAt: now,
-  } satisfies FinalCompositionPage));
+    const common = {
+      id: createPackagingFormalPageId(),
+      taskId,
+      pageId: page.id,
+      pageRole: candidate.pageRole,
+      pageType: page.pageType,
+      pageBucket: "front" as const,
+      sourceCandidateId: candidate.id,
+      basedOnContentVersionId: candidate.basedOnContentVersionId,
+      candidateLabel: candidate.candidateLabel,
+      promptNote: candidate.promptNote,
+      summary: candidate.summary,
+    };
+
+    if (candidate.pageRole === "cover") {
+      const coverMeta = page.coverMeta ?? {
+        title: page.pageType,
+        subtitle: "",
+        issueLabel: "",
+        heroLabel: "",
+        brandLabel: "",
+        kicker: "",
+      };
+
+      packagingFormalPageMap.set(page.id, {
+        ...common,
+        title: coverMeta.title,
+        subtitle: coverMeta.subtitle,
+        footerNote: `${coverMeta.issueLabel} · ${coverMeta.brandLabel}`.trim(),
+        kicker: coverMeta.kicker,
+        heroLabel: coverMeta.heroLabel,
+        issueLabel: coverMeta.issueLabel,
+        brandLabel: coverMeta.brandLabel,
+      });
+      return;
+    }
+
+    packagingFormalPageMap.set(page.id, {
+      ...common,
+      title: page.pageType,
+      subtitle: "目录组织与阅读导航",
+      footerNote: "目录页可在硬编辑阶段继续微调标题和顺序表达。",
+      tocEntries: orderedContentPages.map((contentPage, index) => `${index + 1}. ${contentPage.pageType}`),
+      guidanceNote: "目录页直接依据已确认内容结构生成，用于建立全刊阅读入口。",
+    });
+  });
+
+  const compositionPages = orderedSourcePages.map((page, index) => {
+    const approvedPackagingCandidate = page.pageKind === "packaging" ? approvedPackagingCandidateMap.get(page.id) : undefined;
+    const approvedPackagingPage = page.pageKind === "packaging" ? packagingFormalPageMap.get(page.id) : undefined;
+    return {
+      id: createCompositionPageId(),
+      compositionId,
+      taskId,
+      sourcePageId: page.id,
+      sourceKind: page.pageKind === "content" ? "content-page" : "packaging-page",
+      sourceVersionId: page.pageKind === "content" ? approvedVersion.id : approvedPackagingCandidate?.id ?? approvedVersion.id,
+      sourcePackagingCandidateId: approvedPackagingCandidate?.id,
+      sourcePackaging:
+        approvedPackagingCandidate && (page.pageRole === "cover" || page.pageRole === "toc")
+          ? {
+              candidateId: approvedPackagingCandidate.id,
+              pageId: approvedPackagingCandidate.pageId,
+              pageRole: approvedPackagingCandidate.pageRole,
+              candidateLabel: approvedPackagingCandidate.candidateLabel,
+              promptNote: approvedPackagingCandidate.promptNote,
+              summary: approvedPackagingCandidate.summary,
+              basedOnContentVersionId: approvedPackagingCandidate.basedOnContentVersionId,
+            }
+          : undefined,
+      sourcePackagingPageId: approvedPackagingPage?.id,
+      sourcePackagingPage: approvedPackagingPage,
+      pageKind: page.pageKind,
+      pageRole: page.pageRole,
+      pageType: page.pageType,
+      pageBucket: page.pageKind === "content" ? "content" : page.pageRole === "cover" || page.pageRole === "toc" ? "front" : "rear",
+      orderIndex: index + 1,
+      sourcePageModel: page.pageKind === "content" ? contentPageModelMap.get(page.id) : undefined,
+      previewHtml:
+        page.pageKind === "content"
+          ? approvedVersion.previewsByPageId[page.id] ?? ""
+          : approvedPackagingPage
+            ? renderPackagingFormalToHtml(page.pageRole, approvedPackagingPage)
+            : approvedPackagingCandidate?.previewHtml ?? "",
+      createdAt: now,
+    } satisfies FinalCompositionPage;
+  });
 
   const frontCompositionPageIds = compositionPages.filter((page) => page.pageBucket === "front").map((page) => page.id);
   const contentCompositionPageIds = compositionPages.filter((page) => page.pageBucket === "content").map((page) => page.id);
   const rearCompositionPageIds = compositionPages.filter((page) => page.pageBucket === "rear").map((page) => page.id);
+  const frontSourcePageIds = frontPages.map((page) => page.id);
+  const contentSourcePageIds = orderedContentPages.map((page) => page.id);
+  const rearSourcePageIds = rearPages.map((page) => page.id);
+  const orderedSourcePageIds = orderedSourcePages.map((page) => page.id);
+  const frontApprovedPackagingCandidateIds = frontPages
+    .map((page) => approvedPackagingCandidateMap.get(page.id)?.id)
+    .filter((id): id is string => Boolean(id));
+  const rearApprovedPackagingCandidateIds = rearPages
+    .map((page) => approvedPackagingCandidateMap.get(page.id)?.id)
+    .filter((id): id is string => Boolean(id));
 
   const composition: FinalComposition = {
     id: compositionId,
     taskId,
     approvedContentVersionId: approvedVersion.id,
+    contentPageIds: orderedContentPages.map((page) => page.id),
     packagingPageIds: packagingPages.map((page) => page.id),
+    frontSourcePageIds,
+    contentSourcePageIds,
+    rearSourcePageIds,
+    orderedSourcePageIds,
     approvedPackagingCandidateIds: packagingCandidates.filter((candidate) => candidate.isApproved).map((candidate) => candidate.id),
+    frontApprovedPackagingCandidateIds,
+    rearApprovedPackagingCandidateIds,
     frontCompositionPageIds,
     contentCompositionPageIds,
     rearCompositionPageIds,
@@ -532,8 +1153,9 @@ function createHardEditDraft(
   allContentPages: Page[],
 ): HardEditPageDraft {
   const now = new Date().toISOString();
-
-  if (compositionPage.pageRole === "cover") {
+  if (compositionPage.pageRole === "cover" || compositionPage.pageRole === "toc") {
+    const packagingSeed = createPackagingEditableElements(compositionPage, sourcePage, allContentPages);
+    const surfaceFields = summarizeDraftFieldsFromElements(packagingSeed.elements, packagingSeed.fallback);
     return {
       id: createDraftId(),
       taskId: compositionPage.taskId,
@@ -541,46 +1163,22 @@ function createHardEditDraft(
       compositionPageId: compositionPage.id,
       sourcePageId: compositionPage.sourcePageId,
       sourceVersionId: compositionPage.sourceVersionId,
+      sourceObjectKind: packagingSeed.sourceObjectKind,
       sourcePreviewHtml: compositionPage.previewHtml,
-      title: sourcePage?.coverMeta?.title ?? sourcePage?.pageType ?? compositionPage.pageType,
-      subtitle: sourcePage?.coverMeta?.subtitle ?? "",
-      bodyText: sourcePage?.coverMeta?.heroLabel ?? "",
-      imageCaption: "主视觉区域说明",
-      chartCaption: "",
-      footerNote: `${sourcePage?.coverMeta?.issueLabel ?? ""} · ${sourcePage?.coverMeta?.brandLabel ?? ""}`.trim(),
+      editableElements: packagingSeed.elements,
+      title: surfaceFields.title,
+      subtitle: surfaceFields.subtitle,
+      bodyText: surfaceFields.bodyText,
+      imageCaption: surfaceFields.imageCaption,
+      chartCaption: surfaceFields.chartCaption,
+      footerNote: surfaceFields.footerNote,
       isDirty: false,
       lastSavedAt: now,
     };
   }
 
-  if (compositionPage.pageRole === "toc") {
-    const contentEntries = allContentPages
-      .slice()
-      .sort((a, b) => a.index - b.index)
-      .map((page, index) => `${index + 1}. ${page.pageType}`)
-      .join("\n");
-
-    return {
-      id: createDraftId(),
-      taskId: compositionPage.taskId,
-      compositionId: compositionPage.compositionId,
-      compositionPageId: compositionPage.id,
-      sourcePageId: compositionPage.sourcePageId,
-      sourceVersionId: compositionPage.sourceVersionId,
-      sourcePreviewHtml: compositionPage.previewHtml,
-      title: compositionPage.pageType,
-      subtitle: "目录组织与阅读导航",
-      bodyText: contentEntries,
-      imageCaption: "",
-      chartCaption: "",
-      footerNote: "目录页可在硬编辑阶段继续微调标题和顺序表达。",
-      isDirty: false,
-      lastSavedAt: now,
-    };
-  }
-
-  const imageBlock = sourcePage?.userProvidedContentBlocks.find((block) => block.type === "image");
-  const chartBlock = sourcePage?.userProvidedContentBlocks.find((block) => block.type === "chart_desc");
+  const contentSeed = createContentEditableElements(compositionPage, sourcePage);
+  const surfaceFields = summarizeDraftFieldsFromElements(contentSeed.elements, contentSeed.fallback);
 
   return {
     id: createDraftId(),
@@ -589,13 +1187,15 @@ function createHardEditDraft(
     compositionPageId: compositionPage.id,
     sourcePageId: compositionPage.sourcePageId,
     sourceVersionId: compositionPage.sourceVersionId,
+    sourceObjectKind: contentSeed.sourceObjectKind,
     sourcePreviewHtml: compositionPage.previewHtml,
-    title: sourcePage?.pageType ?? compositionPage.pageType,
-    subtitle: sourcePage?.styleText ?? "",
-    bodyText: sourcePage?.outlineText ?? "",
-    imageCaption: imageBlock?.type === "image" ? imageBlock.caption : "",
-    chartCaption: chartBlock?.type === "chart_desc" ? chartBlock.description : "",
-    footerNote: sourcePage?.userConstraints ?? "",
+    editableElements: contentSeed.elements,
+    title: surfaceFields.title,
+    subtitle: surfaceFields.subtitle,
+    bodyText: surfaceFields.bodyText,
+    imageCaption: surfaceFields.imageCaption,
+    chartCaption: surfaceFields.chartCaption,
+    footerNote: surfaceFields.footerNote,
     isDirty: false,
     lastSavedAt: now,
   };
@@ -652,7 +1252,14 @@ function rebuildLegacyCompositionState(
             compositionPageId: compositionPage.id,
             sourcePageId: compositionPage.sourcePageId,
             sourceVersionId: asString(legacy.sourceVersionId, compositionPage.sourceVersionId),
+            sourceObjectKind:
+              compositionPage.pageKind === "packaging"
+                ? "packaging-formal-page"
+                : compositionPage.sourcePageModel
+                  ? "content-page-model"
+                  : "legacy-source-page",
             sourcePreviewHtml: asString(legacy.sourcePreviewHtml, compositionPage.previewHtml),
+            editableElements: [],
             title: asString(legacy.title, compositionPage.pageType),
             subtitle: asString(legacy.subtitle),
             bodyText: asString(legacy.bodyText),
@@ -719,6 +1326,7 @@ export const useAppStore = create<AppState>()(
       finalCompositions: [],
       finalCompositionPages: [],
       hardEditDrafts: [],
+      editedCompositionPageResults: [],
       assets: [],
       activeTaskId: null,
       isBootstrapped: false,
@@ -739,6 +1347,7 @@ export const useAppStore = create<AppState>()(
           finalCompositions: [],
           finalCompositionPages: [],
           hardEditDrafts: [],
+          editedCompositionPageResults: [],
           assets: seed.assets,
           activeTaskId: seed.task.id,
           isBootstrapped: true,
@@ -767,6 +1376,7 @@ export const useAppStore = create<AppState>()(
           finalCompositions: state.finalCompositions.filter((item) => item.taskId !== result.task.id),
           finalCompositionPages: state.finalCompositionPages.filter((page) => page.taskId !== result.task.id),
           hardEditDrafts: state.hardEditDrafts.filter((draft) => draft.taskId !== result.task.id),
+          editedCompositionPageResults: state.editedCompositionPageResults.filter((item) => item.taskId !== result.task.id),
           activeTaskId: result.task.id,
           isGenerating: false,
         }));
@@ -831,7 +1441,7 @@ export const useAppStore = create<AppState>()(
         return canEnterExportStage(
           state.finalCompositions.find((item) => item.taskId === taskId),
           state.finalCompositionPages.filter((page) => page.taskId === taskId),
-          state.hardEditDrafts.filter((draft) => draft.taskId === taskId),
+          state.editedCompositionPageResults.filter((result) => result.taskId === taskId),
         );
       },
       getTaskFinalComposition: (taskId) => get().finalCompositions.find((item) => item.taskId === taskId),
@@ -1052,6 +1662,7 @@ export const useAppStore = create<AppState>()(
               ...state.hardEditDrafts.filter((draft) => draft.taskId !== taskId),
               ...drafts,
             ],
+            editedCompositionPageResults: state.editedCompositionPageResults.filter((resultItem) => resultItem.taskId !== taskId),
           };
         });
       },
@@ -1064,9 +1675,9 @@ export const useAppStore = create<AppState>()(
 
           const finalComposition = state.finalCompositions.find((item) => item.taskId === taskId);
           const finalCompositionPages = state.finalCompositionPages.filter((page) => page.taskId === taskId);
-          const taskDrafts = state.hardEditDrafts.filter((draft) => draft.taskId === taskId);
+          const editedResults = state.editedCompositionPageResults.filter((result) => result.taskId === taskId);
 
-          if (!canEnterExportStage(finalComposition, finalCompositionPages, taskDrafts)) {
+          if (!canEnterExportStage(finalComposition, finalCompositionPages, editedResults)) {
             return state;
           }
 
@@ -1089,19 +1700,27 @@ export const useAppStore = create<AppState>()(
         const task = state.tasks.find((item) => item.id === taskId);
         const finalComposition = state.finalCompositions.find((item) => item.taskId === taskId);
         const finalCompositionPages = state.finalCompositionPages.filter((page) => page.taskId === taskId);
-        const taskDrafts = state.hardEditDrafts.filter((draft) => draft.taskId === taskId);
+        const editedResults = state.editedCompositionPageResults.filter((result) => result.taskId === taskId);
 
-        if (!task || !canEnterExportStage(finalComposition, finalCompositionPages, taskDrafts) || !finalComposition) {
+        if (!task || !canEnterExportStage(finalComposition, finalCompositionPages, editedResults) || !finalComposition) {
           return null;
         }
 
+        const orderedCompositionPages = finalCompositionPages
+          .filter((page) => page.compositionId === finalComposition.id)
+          .slice()
+          .sort((a, b) => a.orderIndex - b.orderIndex);
+        const editedResultMap = new Map(editedResults.map((result) => [result.compositionPageId, result] as const));
+        const pageResults = orderedCompositionPages.map((page) => editedResultMap.get(page.id) ?? createEditedResultFromCompositionFallback(page));
+        const editedPageCount = pageResults.filter((result) => editedResultMap.has(result.compositionPageId)).length;
+        const resultSourceKind = editedPageCount ? ("edited-result" as const) : ("composition-default" as const);
         const existingAsset = state.assets.find((asset) => asset.compositionId === finalComposition.id);
-        const coverDraft = taskDrafts.find((draft) => {
-          const page = finalCompositionPages.find((item) => item.id === draft.compositionPageId);
+        const coverResult = pageResults.find((result) => {
+          const page = orderedCompositionPages.find((item) => item.id === result.compositionPageId);
           return page?.pageRole === "cover";
         });
         const exportFormat = "pdf";
-        const title = coverDraft?.title || task.title;
+        const title = coverResult?.title || task.title;
         const pageTypes = finalCompositionPages.map((page) => page.pageType);
         const assetId = existingAsset?.id ?? createAssetId();
         const baseAsset = normalizeAsset({
@@ -1121,6 +1740,8 @@ export const useAppStore = create<AppState>()(
           fileSizeBytes: 0,
           readyAt: null,
           errorMessage: "",
+          resultSourceKind,
+          editedPageCount,
           status: "preparing",
         });
 
@@ -1147,10 +1768,9 @@ export const useAppStore = create<AppState>()(
 
         try {
           const pdfFile = await generatePdfFromFinalComposition({
-            task: { ...task, preferredExportFormat: "pdf" },
             composition: finalComposition,
             compositionPages: finalCompositionPages,
-            drafts: taskDrafts,
+            pageResults,
           });
 
           const completedAsset = normalizeAsset({
@@ -1185,27 +1805,57 @@ export const useAppStore = create<AppState>()(
         set((state) => ({
           hardEditDrafts: state.hardEditDrafts.map((draft) =>
             draft.id === draftId
-              ? {
-                  ...draft,
-                  ...patch,
-                  isDirty: true,
-                }
+              ? (() => {
+                  const nextDraft = {
+                    ...draft,
+                    ...patch,
+                  };
+                  const elementPatch = Array.isArray(patch.editableElements)
+                    ? summarizeDraftFieldsFromElements(patch.editableElements, {
+                        title: nextDraft.title,
+                        subtitle: nextDraft.subtitle,
+                        bodyText: nextDraft.bodyText,
+                        imageCaption: nextDraft.imageCaption,
+                        chartCaption: nextDraft.chartCaption,
+                        footerNote: nextDraft.footerNote,
+                      })
+                    : null;
+
+                  return {
+                    ...nextDraft,
+                    ...(elementPatch ?? {}),
+                    isDirty: true,
+                  };
+                })()
               : draft,
           ),
         }));
       },
       saveHardEditDraft: (draftId) => {
-        set((state) => ({
-          hardEditDrafts: state.hardEditDrafts.map((draft) =>
-            draft.id === draftId
-              ? {
-                  ...draft,
-                  isDirty: false,
-                  lastSavedAt: new Date().toISOString(),
-                }
-              : draft,
-          ),
-        }));
+        set((state) => {
+          const draft = state.hardEditDrafts.find((item) => item.id === draftId);
+          if (!draft) {
+            return state;
+          }
+
+          const savedDraft = {
+            ...draft,
+            isDirty: false,
+            lastSavedAt: new Date().toISOString(),
+          };
+          const compositionPage = state.finalCompositionPages.find((page) => page.id === savedDraft.compositionPageId);
+          const sourcePage = state.pages.find((page) => page.id === savedDraft.sourcePageId) ?? state.packagingPages.find((page) => page.id === savedDraft.sourcePageId);
+          const editedResult = compositionPage ? createEditedCompositionPageResultFromDraft(compositionPage, savedDraft, sourcePage) : null;
+
+          return {
+            hardEditDrafts: state.hardEditDrafts.map((item) => (item.id === draftId ? savedDraft : item)),
+            editedCompositionPageResults: editedResult
+              ? state.editedCompositionPageResults.some((item) => item.id === editedResult.id)
+                ? state.editedCompositionPageResults.map((item) => (item.id === editedResult.id ? editedResult : item))
+                : [...state.editedCompositionPageResults, editedResult]
+              : state.editedCompositionPageResults,
+          };
+        });
       },
       updatePage: (pageId, patch) => {
         set((state) => ({
@@ -1368,7 +2018,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: "pagescut-v1",
-      version: 8,
+      version: 9,
       migrate: (persistedState) => {
         const state = persistedState as Partial<AppState> | undefined;
         if (!state) {
@@ -1421,6 +2071,11 @@ export const useAppStore = create<AppState>()(
           ? state.finalCompositionPages.map((page) => normalizeFinalCompositionPage(page))
           : [];
         const incomingHardEditDrafts = Array.isArray(state.hardEditDrafts) ? state.hardEditDrafts : [];
+        const incomingEditedCompositionPageResults = Array.isArray((state as Partial<AppState>).editedCompositionPageResults)
+          ? ((state as Partial<AppState>).editedCompositionPageResults ?? []).map((item) =>
+              normalizeEditedCompositionPageResult(item as EditedCompositionPageResult),
+            )
+          : [];
 
         const rebuiltLegacyState =
           incomingFinalCompositions.length || incomingFinalCompositionPages.length
@@ -1442,6 +2097,7 @@ export const useAppStore = create<AppState>()(
           hardEditDrafts: incomingFinalCompositions.length
             ? incomingHardEditDrafts.map((draft) => normalizeHardEditDraft(draft as HardEditPageDraft))
             : rebuiltLegacyState?.migratedDrafts ?? [],
+          editedCompositionPageResults: incomingEditedCompositionPageResults,
           assets: Array.isArray(state.assets) ? state.assets.map((asset) => normalizeAsset(asset)) : [],
         } as AppState;
       },
@@ -1455,6 +2111,7 @@ export const useAppStore = create<AppState>()(
         finalCompositions: state.finalCompositions,
         finalCompositionPages: state.finalCompositionPages,
         hardEditDrafts: state.hardEditDrafts,
+        editedCompositionPageResults: state.editedCompositionPageResults,
         assets: state.assets,
         activeTaskId: state.activeTaskId,
         isBootstrapped: state.isBootstrapped,
