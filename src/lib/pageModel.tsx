@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { getContentUnitPolicy, getTextUnitPolicy, resolveTextUnitAssemblyFromTextSources, resolveUnitAssemblyFromPolicy } from "@/lib/contentUnitPolicy";
+import { getContentUnitPolicy, getTextUnitPolicy, resolveTextUnitAssemblyFromSourceSet, resolveUnitAssemblyFromSourceSet } from "@/lib/contentUnitPolicy";
+import { createPageSourceSet } from "@/lib/pageSources";
 import { generateCaseContractInput, generateDataContractInput, generateOverviewContractInput, generateSummaryContractInput } from "@/lib/realContent";
 import type { Page, UserProvidedContentBlock } from "@/types/domain";
 import type {
@@ -15,6 +16,7 @@ import type {
   PageIntentContentArea,
   PageModel,
   PageModelBlock,
+  PageSourceSet,
   SupportedPageType,
 } from "@/types/pageModel";
 
@@ -25,11 +27,6 @@ type PageRenderDensity = "regular" | "compact";
 
 function createBlockId(prefix: string, index: number) {
   return `${prefix}-${index + 1}`;
-}
-
-function clampText(value: string, limit: number, fallback = "") {
-  const trimmed = value.trim() || fallback;
-  return trimmed.length > limit ? `${trimmed.slice(0, limit)}...` : trimmed;
 }
 
 function buildOverviewTheme(seed: number) {
@@ -103,54 +100,6 @@ function countBlocksByType(blocks: UserProvidedContentBlock[], type: UserProvide
   return blocks.filter((block) => block.type === type).length;
 }
 
-function buildSyntheticTextSources(page: Page, fallbacks: string[]) {
-  return fallbacks
-    .map((value, index) => value.trim() || page.outlineText.trim() || `text source ${index + 1}`)
-    .filter(Boolean)
-    .map((value, index) => ({
-      id: `${page.id}-synthetic-text-${index + 1}`,
-      label: clampText(value, 26, `text source ${index + 1}`),
-    }));
-}
-
-function buildOverviewTextSources(page: Page) {
-  const explicitTexts = page.userProvidedContentBlocks
-    .filter((block): block is Extract<UserProvidedContentBlock, { type: "text" }> => block.type === "text")
-    .map((block, index) => ({
-      id: block.id,
-      label: clampText(block.text, 26, `text source ${index + 1}`),
-    }));
-
-  const fallbackTexts = buildSyntheticTextSources(page, [page.outlineText, page.styleText, page.userConstraints]);
-  const combined = [...explicitTexts];
-  fallbackTexts.forEach((item) => {
-    if (!combined.some((existing) => existing.label === item.label)) {
-      combined.push(item);
-    }
-  });
-
-  return combined.slice(0, 3);
-}
-
-function buildSummaryTextSources(page: Page) {
-  const explicitTexts = page.userProvidedContentBlocks
-    .filter((block): block is Extract<UserProvidedContentBlock, { type: "text" }> => block.type === "text")
-    .map((block, index) => ({
-      id: block.id,
-      label: clampText(block.text, 26, `text source ${index + 1}`),
-    }));
-
-  const fallbackTexts = buildSyntheticTextSources(page, [page.outlineText, page.userConstraints, page.styleText]);
-  const combined = [...explicitTexts];
-  fallbackTexts.forEach((item) => {
-    if (!combined.some((existing) => existing.label === item.label)) {
-      combined.push(item);
-    }
-  });
-
-  return combined.slice(0, 3);
-}
-
 // PageIntent is the bridge between Stage 1 page definition and later layout generation.
 // It keeps expression preferences structural, without letting Stage 1 define concrete panels.
 export function createPageIntent(page: Page): PageIntent | null {
@@ -218,11 +167,12 @@ export function createPageIntent(page: Page): PageIntent | null {
 
 // PageContentPlan answers how many content units the page needs, how they pair,
 // and which units are required before layout contract generation decides containers.
-export function createPageContentPlan(page: Page, pageIntent: PageIntent): PageContentPlan {
+export function createPageContentPlan(page: Page, pageIntent: PageIntent, pageSourceSet?: PageSourceSet | null): PageContentPlan {
+  const effectiveSourceSet = pageSourceSet ?? createPageSourceSet(page);
   if (pageIntent.pageType === "case") {
     const requestedPairCount = Math.max(1, pageIntent.preferredImageCount || 1);
     const availablePairCount = Math.min(
-      countBlocksByType(page.userProvidedContentBlocks, "image"),
+      effectiveSourceSet.imageAssets.length,
       countBlocksByType(page.userProvidedContentBlocks, "text"),
     );
     const resolvedPairCount = pageIntent.allowDegrade
@@ -231,7 +181,7 @@ export function createPageContentPlan(page: Page, pageIntent: PageIntent): PageC
         : 1
       : requestedPairCount;
     const pairPolicy = getContentUnitPolicy("imageTextPair");
-    const pairAssembly = resolveUnitAssemblyFromPolicy("imageTextPair", page.userProvidedContentBlocks, resolvedPairCount);
+    const pairAssembly = resolveUnitAssemblyFromSourceSet("imageTextPair", effectiveSourceSet, page.userProvidedContentBlocks, resolvedPairCount);
     return {
       pageId: page.id,
       pageType: pageIntent.pageType,
@@ -282,7 +232,7 @@ export function createPageContentPlan(page: Page, pageIntent: PageIntent): PageC
 
   if (pageIntent.pageType === "data") {
     const requestedChartPairCount = Math.max(1, pageIntent.preferredChartCount || 1);
-    const availableChartPairCount = countBlocksByType(page.userProvidedContentBlocks, "chart_desc");
+    const availableChartPairCount = effectiveSourceSet.chartBriefs.length;
     const resolvedChartPairCount =
       availableChartPairCount > 0
         ? Math.min(requestedChartPairCount, availableChartPairCount)
@@ -291,7 +241,7 @@ export function createPageContentPlan(page: Page, pageIntent: PageIntent): PageC
           : requestedChartPairCount;
     const hasTable = page.userProvidedContentBlocks.some((block) => block.type === "table");
     const chartPairPolicy = getContentUnitPolicy("chartExplanationPair");
-    const chartPairAssembly = resolveUnitAssemblyFromPolicy("chartExplanationPair", page.userProvidedContentBlocks, resolvedChartPairCount);
+    const chartPairAssembly = resolveUnitAssemblyFromSourceSet("chartExplanationPair", effectiveSourceSet, page.userProvidedContentBlocks, resolvedChartPairCount);
     return {
       pageId: page.id,
       pageType: pageIntent.pageType,
@@ -343,8 +293,7 @@ export function createPageContentPlan(page: Page, pageIntent: PageIntent): PageC
   if (pageIntent.pageType === "overview") {
     const requestedTextUnits = 3;
     const textPolicy = getTextUnitPolicy();
-    const overviewTextSources = buildOverviewTextSources(page);
-    const textAssembly = resolveTextUnitAssemblyFromTextSources(overviewTextSources, requestedTextUnits);
+    const textAssembly = resolveTextUnitAssemblyFromSourceSet(effectiveSourceSet, requestedTextUnits);
     return {
       pageId: page.id,
       pageType: pageIntent.pageType,
@@ -370,8 +319,7 @@ export function createPageContentPlan(page: Page, pageIntent: PageIntent): PageC
   if (pageIntent.pageType === "summary") {
     const requestedTextUnits = 3;
     const textPolicy = getTextUnitPolicy();
-    const summaryTextSources = buildSummaryTextSources(page);
-    const textAssembly = resolveTextUnitAssemblyFromTextSources(summaryTextSources, requestedTextUnits);
+    const textAssembly = resolveTextUnitAssemblyFromSourceSet(effectiveSourceSet, requestedTextUnits);
     return {
       pageId: page.id,
       pageType: pageIntent.pageType,
@@ -415,57 +363,61 @@ export function createPageContentPlan(page: Page, pageIntent: PageIntent): PageC
   };
 }
 
-export function createGeneratedOverviewContract(page: Page, versionLabel: string, pageIntent?: PageIntent | null, _contentPlan?: PageContentPlan | null): GeneratedOverviewContractInput | null {
+export function createGeneratedOverviewContract(page: Page, versionLabel: string, pageIntent?: PageIntent | null, _contentPlan?: PageContentPlan | null, pageSourceSet?: PageSourceSet | null): GeneratedOverviewContractInput | null {
   if (resolveSupportedPageType(page) !== "overview") {
     return null;
   }
   const effectiveIntent = pageIntent ?? createPageIntent(page);
-  const effectivePlan = _contentPlan ?? (effectiveIntent ? createPageContentPlan(page, effectiveIntent) : null);
+  const effectiveSourceSet = pageSourceSet ?? createPageSourceSet(page);
+  const effectivePlan = _contentPlan ?? (effectiveIntent ? createPageContentPlan(page, effectiveIntent, effectiveSourceSet) : null);
   if (!effectiveIntent) {
     return null;
   }
 
-  return generateOverviewContractInput(page, versionLabel, effectiveIntent, effectivePlan);
+  return generateOverviewContractInput(page, versionLabel, effectiveIntent, effectivePlan, effectiveSourceSet);
 }
 
-export function createManualDataContract(page: Page, versionLabel: string, pageIntent?: PageIntent | null, contentPlan?: PageContentPlan | null): ManualDataContractInput | null {
+export function createManualDataContract(page: Page, versionLabel: string, pageIntent?: PageIntent | null, contentPlan?: PageContentPlan | null, pageSourceSet?: PageSourceSet | null): ManualDataContractInput | null {
   if (resolveSupportedPageType(page) !== "data") {
     return null;
   }
   const effectiveIntent = pageIntent ?? createPageIntent(page);
-  const effectivePlan = contentPlan ?? (effectiveIntent ? createPageContentPlan(page, effectiveIntent) : null);
+  const effectiveSourceSet = pageSourceSet ?? createPageSourceSet(page);
+  const effectivePlan = contentPlan ?? (effectiveIntent ? createPageContentPlan(page, effectiveIntent, effectiveSourceSet) : null);
   if (!effectiveIntent) {
     return null;
   }
 
-  return generateDataContractInput(page, versionLabel, effectiveIntent, effectivePlan);
+  return generateDataContractInput(page, versionLabel, effectiveIntent, effectivePlan, effectiveSourceSet);
 }
 
-export function createGeneratedCaseContract(page: Page, versionLabel: string, pageIntent?: PageIntent | null, contentPlan?: PageContentPlan | null): GeneratedCaseContractInput | null {
+export function createGeneratedCaseContract(page: Page, versionLabel: string, pageIntent?: PageIntent | null, contentPlan?: PageContentPlan | null, pageSourceSet?: PageSourceSet | null): GeneratedCaseContractInput | null {
   if (resolveSupportedPageType(page) !== "case") {
     return null;
   }
 
   const effectiveIntent = pageIntent ?? createPageIntent(page);
-  const effectivePlan = contentPlan ?? (effectiveIntent ? createPageContentPlan(page, effectiveIntent) : null);
+  const effectiveSourceSet = pageSourceSet ?? createPageSourceSet(page);
+  const effectivePlan = contentPlan ?? (effectiveIntent ? createPageContentPlan(page, effectiveIntent, effectiveSourceSet) : null);
   if (!effectiveIntent) {
     return null;
   }
 
-  return generateCaseContractInput(page, versionLabel, effectiveIntent, effectivePlan);
+  return generateCaseContractInput(page, versionLabel, effectiveIntent, effectivePlan, effectiveSourceSet);
 }
 
-export function createGeneratedSummaryContract(page: Page, versionLabel: string, pageIntent?: PageIntent | null, _contentPlan?: PageContentPlan | null): GeneratedSummaryContractInput | null {
+export function createGeneratedSummaryContract(page: Page, versionLabel: string, pageIntent?: PageIntent | null, _contentPlan?: PageContentPlan | null, pageSourceSet?: PageSourceSet | null): GeneratedSummaryContractInput | null {
   if (resolveSupportedPageType(page) !== "summary") {
     return null;
   }
   const effectiveIntent = pageIntent ?? createPageIntent(page);
-  const effectivePlan = _contentPlan ?? (effectiveIntent ? createPageContentPlan(page, effectiveIntent) : null);
+  const effectiveSourceSet = pageSourceSet ?? createPageSourceSet(page);
+  const effectivePlan = _contentPlan ?? (effectiveIntent ? createPageContentPlan(page, effectiveIntent, effectiveSourceSet) : null);
   if (!effectiveIntent) {
     return null;
   }
 
-  return generateSummaryContractInput(page, versionLabel, effectiveIntent, effectivePlan);
+  return generateSummaryContractInput(page, versionLabel, effectiveIntent, effectivePlan, effectiveSourceSet);
 }
 
 export function fillContractToPageModel(contract: LayoutContract, variant = 0): PageModel {

@@ -1,13 +1,18 @@
 import { getPageDisplayLabel } from "@/lib/pageDisplay";
+import { getChartBriefSourceById, getImageSourceAssetById, getTextSourceFragmentById } from "@/lib/pageSources";
 import type { FinalCompositionPage, GeneratedCoverContent, GeneratedTocContent, Page, Task } from "@/types/domain";
 import type {
+  ChartBriefSource,
   GeneratedCaseContractInput,
   GeneratedOverviewContractInput,
   GeneratedSummaryContractInput,
+  ImageSourceAsset,
   ManualDataContractInput,
   PageContentPlan,
   PageContentSlotBinding,
   PageIntent,
+  PageSourceSet,
+  TextSourceFragment,
 } from "@/types/pageModel";
 
 function clampText(value: string, limit: number, fallback = "") {
@@ -59,13 +64,35 @@ function parseIssueLabel(prompt: string) {
   return `${year} / ${String(month).padStart(2, "0")}`;
 }
 
-function buildOverviewBaseTexts(page: Page) {
+function getPreferredTextValues(
+  page: Page,
+  pageSourceSet: PageSourceSet | null | undefined,
+  preferredSyntheticOrder: Array<NonNullable<TextSourceFragment["sourceField"]>>,
+) {
+  const sourceTexts = pageSourceSet
+    ? [
+        ...pageSourceSet.textFragments.filter((item) => item.origin === "user-block"),
+        ...preferredSyntheticOrder.flatMap((field) =>
+          pageSourceSet.textFragments.filter((item) => item.origin === "synthetic" && item.sourceField === field),
+        ),
+      ]
+        .map((item) => item.text.trim())
+        .filter(Boolean)
+    : [];
+  if (sourceTexts.length) {
+    return sourceTexts;
+  }
+
   const textBlocks = page.userProvidedContentBlocks
     .filter((block): block is Extract<Page["userProvidedContentBlocks"][number], { type: "text" }> => block.type === "text")
     .map((block) => block.text.trim())
     .filter(Boolean);
   const fallbacks = [page.outlineText, page.styleText, page.userConstraints].map((item) => item.trim()).filter(Boolean);
-  const combined = [...textBlocks, ...fallbacks];
+  return [...textBlocks, ...fallbacks];
+}
+
+function buildOverviewBaseTexts(page: Page, pageSourceSet?: PageSourceSet | null) {
+  const combined = getPreferredTextValues(page, pageSourceSet, ["outlineText", "styleText", "userConstraints"]);
 
   return {
     primary: combined[0] || "本页需要先完成主题进入和总体判断。",
@@ -74,13 +101,8 @@ function buildOverviewBaseTexts(page: Page) {
   };
 }
 
-function buildSummaryBaseTexts(page: Page) {
-  const textBlocks = page.userProvidedContentBlocks
-    .filter((block): block is Extract<Page["userProvidedContentBlocks"][number], { type: "text" }> => block.type === "text")
-    .map((block) => block.text.trim())
-    .filter(Boolean);
-  const fallbacks = [page.outlineText, page.userConstraints, page.styleText].map((item) => item.trim()).filter(Boolean);
-  const combined = [...textBlocks, ...fallbacks];
+function buildSummaryBaseTexts(page: Page, pageSourceSet?: PageSourceSet | null) {
+  const combined = getPreferredTextValues(page, pageSourceSet, ["outlineText", "userConstraints", "styleText"]);
 
   return {
     primary: combined[0] || "本页需要把整期内容收束成最终判断，而不是继续展开。",
@@ -94,8 +116,9 @@ export function generateOverviewContractInput(
   versionLabel: string,
   pageIntent: PageIntent,
   contentPlan: PageContentPlan | null,
+  pageSourceSet?: PageSourceSet | null,
 ): GeneratedOverviewContractInput {
-  const baseTexts = buildOverviewBaseTexts(page);
+  const baseTexts = buildOverviewBaseTexts(page, pageSourceSet);
   const topic = clampText(pickFirstMeaningful(page.outlineText, page.pageType), 30, page.pageType);
   const tone = page.styleText.trim() || "结构清晰、克制专业";
   const constraint = page.userConstraints.trim() || "保持总览页的判断优先级。";
@@ -103,8 +126,9 @@ export function generateOverviewContractInput(
   const textAssembly = textUnit?.assembly;
   const textUnits = Array.from({ length: textUnit?.resolvedCount ?? 0 }, (_, index) => {
     const binding = textAssembly?.resolvedUnits?.[index];
+    const textSource = getTextFragmentByBinding(pageSourceSet, binding?.slots ?? []);
     return {
-      label: `判断文本单元 ${index + 1}`,
+      label: textSource?.label || `判断文本单元 ${index + 1}`,
       outcome: binding?.outcome,
       textSlotLabel: `text slot ${index + 1}`,
       slotBindings: binding?.slots ?? [],
@@ -198,8 +222,9 @@ export function generateSummaryContractInput(
   versionLabel: string,
   pageIntent: PageIntent,
   contentPlan: PageContentPlan | null,
+  pageSourceSet?: PageSourceSet | null,
 ): GeneratedSummaryContractInput {
-  const baseTexts = buildSummaryBaseTexts(page);
+  const baseTexts = buildSummaryBaseTexts(page, pageSourceSet);
   const topic = clampText(pickFirstMeaningful(page.outlineText, page.pageType), 30, page.pageType);
   const boundary = page.userConstraints.trim() || "收束页不重新展开整期内容。";
   const tone = page.styleText.trim() || "克制、收束、可带走";
@@ -207,8 +232,9 @@ export function generateSummaryContractInput(
   const textAssembly = textUnit?.assembly;
   const textUnits = Array.from({ length: textUnit?.resolvedCount ?? 0 }, (_, index) => {
     const binding = textAssembly?.resolvedUnits?.[index];
+    const textSource = getTextFragmentByBinding(pageSourceSet, binding?.slots ?? []);
     return {
-      label: `收束文本单元 ${index + 1}`,
+      label: textSource?.label || `收束文本单元 ${index + 1}`,
       outcome: binding?.outcome,
       textSlotLabel: `text slot ${index + 1}`,
       slotBindings: binding?.slots ?? [],
@@ -291,6 +317,11 @@ function getSlotBindingLabel(bindings: PageContentSlotBinding[], slotType: PageC
   return bindings.find((binding) => binding.slotType === slotType)?.source?.label ?? "";
 }
 
+function getTextFragmentByBinding(pageSourceSet: PageSourceSet | null | undefined, bindings: PageContentSlotBinding[]) {
+  const sourceId = bindings.find((binding) => binding.slotType === "text" || binding.slotType === "explanation")?.source?.sourceId;
+  return getTextSourceFragmentById(pageSourceSet, sourceId);
+}
+
 function getTextBlockValueById(page: Page, sourceId: string | undefined) {
   if (!sourceId) {
     return "";
@@ -300,22 +331,14 @@ function getTextBlockValueById(page: Page, sourceId: string | undefined) {
   return block?.type === "text" ? block.text.trim() : "";
 }
 
-function getChartBlockValueById(page: Page, sourceId: string | undefined) {
-  if (!sourceId) {
-    return "";
-  }
-
-  const block = page.userProvidedContentBlocks.find((item) => item.id === sourceId);
-  return block?.type === "chart_desc" ? block.description.trim() : "";
+function getChartBriefByBinding(pageSourceSet: PageSourceSet | null | undefined, bindings: PageContentSlotBinding[]) {
+  const sourceId = bindings.find((binding) => binding.slotType === "chart")?.source?.sourceId;
+  return getChartBriefSourceById(pageSourceSet, sourceId);
 }
 
-function getImageBlockById(page: Page, sourceId: string | undefined) {
-  if (!sourceId) {
-    return undefined;
-  }
-
-  const block = page.userProvidedContentBlocks.find((item) => item.id === sourceId);
-  return block?.type === "image" ? block : undefined;
+function getImageAssetByBinding(pageSourceSet: PageSourceSet | null | undefined, bindings: PageContentSlotBinding[]) {
+  const sourceId = bindings.find((binding) => binding.slotType === "image")?.source?.sourceId;
+  return getImageSourceAssetById(pageSourceSet, sourceId);
 }
 
 function getTableBlock(page: Page) {
@@ -361,6 +384,7 @@ export function generateDataContractInput(
   versionLabel: string,
   pageIntent: PageIntent,
   contentPlan: PageContentPlan | null,
+  pageSourceSet?: PageSourceSet | null,
 ): ManualDataContractInput {
   const chartPairUnit = contentPlan?.units.find((unit) => unit.unitType === "chartExplanationPair");
   const metricsUnit = contentPlan?.units.find((unit) => unit.unitType === "metric");
@@ -383,17 +407,14 @@ export function generateDataContractInput(
     };
   });
 
-  const chartSourceValues = chartExplanationPairs.map((pair) => {
-    const sourceId = pair.slotBindings.find((binding) => binding.slotType === "chart")?.source?.sourceId;
-    return getChartBlockValueById(page, sourceId);
-  }).filter(Boolean);
+  const chartBriefs = chartExplanationPairs.map((pair) => getChartBriefByBinding(pageSourceSet, pair.slotBindings)).filter(Boolean) as ChartBriefSource[];
   const explanationValues = chartExplanationPairs.map((pair) => {
     const sourceId = pair.slotBindings.find((binding) => binding.slotType === "explanation")?.source?.sourceId;
     return getTextBlockValueById(page, sourceId);
   }).filter(Boolean);
 
   const chartTitle =
-    chartSourceValues[0] ||
+    chartBriefs[0]?.description.trim() ||
     "核心指标变化";
   const chartSummary =
     explanationValues[0] ||
@@ -446,7 +467,7 @@ export function generateDataContractInput(
           columns: derivedTable.columns.slice(0, 2),
           rows: derivedTable.rows.slice(0, 3).map((row) => row.slice(0, 2)),
         },
-    sourceNote: `当前 chart source 来自 ${chartSourceValues.length} 个图表说明块，explanation source 来自 ${explanationValues.length} 个文本块。`,
+    sourceNote: `当前 chart source 来自 ${chartBriefs.length} 个 ChartBriefSource，explanation source 来自 ${explanationValues.length} 个文本块。`,
     sourceLines,
     dataTakeaways,
     notes: chartExplanationPairs.map((pair, index) => {
@@ -477,6 +498,7 @@ export function generateCaseContractInput(
   versionLabel: string,
   pageIntent: PageIntent,
   contentPlan: PageContentPlan | null,
+  pageSourceSet?: PageSourceSet | null,
 ): GeneratedCaseContractInput {
   const imageTextUnit = contentPlan?.units.find((unit) => unit.unitType === "imageTextPair");
   const imageTextAssembly = imageTextUnit?.assembly;
@@ -493,10 +515,7 @@ export function generateCaseContractInput(
     };
   });
 
-  const imageValues = imageTextPairs.map((pair) => {
-    const sourceId = pair.slotBindings.find((binding) => binding.slotType === "image")?.source?.sourceId;
-    return getImageBlockById(page, sourceId);
-  }).filter(Boolean);
+  const imageValues = imageTextPairs.map((pair) => getImageAssetByBinding(pageSourceSet, pair.slotBindings)).filter(Boolean) as ImageSourceAsset[];
   const textValues = imageTextPairs.map((pair) => {
     const sourceId = pair.slotBindings.find((binding) => binding.slotType === "text")?.source?.sourceId;
     return getTextBlockValueById(page, sourceId);

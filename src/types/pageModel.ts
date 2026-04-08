@@ -18,6 +18,7 @@ export type PageContentUnitRelation = "standalone" | "paired" | "grouped";
 export type PageContentSlotType = "image" | "text" | "chart" | "explanation";
 export type PageContentSourceKind = "image-source" | "text-source" | "chart-source" | "explanation-source";
 export type PageContentUnitOutcome = "filled" | "partial" | "unfilled";
+export type PageFormalSourceOrigin = "user-block" | "synthetic";
 export type PageContentMissingReason =
   | "missing-image-source"
   | "missing-text-source"
@@ -41,6 +42,47 @@ export interface PageIntent {
   preferredChartCount: number;
   requiredContentAreas: PageIntentContentArea[];
   allowDegrade: boolean;
+}
+
+export interface ImageSourceAsset {
+  id: string;
+  pageId: string;
+  origin: Extract<PageFormalSourceOrigin, "user-block">;
+  sourceBlockId: string;
+  imageUrl: string;
+  altText: string;
+  caption: string;
+  label: string;
+}
+
+export interface ChartBriefSource {
+  id: string;
+  pageId: string;
+  origin: Extract<PageFormalSourceOrigin, "user-block">;
+  sourceBlockId: string;
+  description: string;
+  chartTypeHint: string;
+  label: string;
+}
+
+export interface TextSourceFragment {
+  id: string;
+  pageId: string;
+  origin: PageFormalSourceOrigin;
+  text: string;
+  label: string;
+  sourceBlockId?: string;
+  sourceField?: "outlineText" | "styleText" | "userConstraints";
+}
+
+export interface PageSourceSet {
+  id: string;
+  pageId: string;
+  sourceVersion: string;
+  createdFrom: "userProvidedContentBlocks+pageDefinition";
+  textFragments: TextSourceFragment[];
+  imageAssets: ImageSourceAsset[];
+  chartBriefs: ChartBriefSource[];
 }
 
 export interface PageContentSourceRef {

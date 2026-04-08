@@ -1,4 +1,5 @@
 import { createGeneratedCaseContract, createGeneratedOverviewContract, createGeneratedSummaryContract, createManualDataContract, createPageContentPlan, createPageIntent, fillContractToPageModel, renderPageModelToHtml } from "@/lib/pageModel";
+import { createPageSourceSet } from "@/lib/pageSources";
 import type { Asset, Page, PageVersion, Project, Task, WorkType } from "@/types/domain";
 import type { PageIntent, PageModel } from "@/types/pageModel";
 
@@ -479,23 +480,24 @@ export function buildMockPageModel(page: Page, versionLabel: string, variant = 0
   const fixturePage = applyMockValidationFixture(page, fixtureFamily);
   const rawPageIntent = createPageIntent(fixturePage);
   const pageIntent = rawPageIntent ? applyIntentFixtureOverrides(fixturePage, rawPageIntent, fixtureFamily) : null;
-  const contentPlan = pageIntent ? createPageContentPlan(fixturePage, pageIntent) : null;
-  const overviewContract = createGeneratedOverviewContract(fixturePage, versionLabel, pageIntent, contentPlan);
+  const pageSourceSet = pageIntent ? createPageSourceSet(fixturePage) : null;
+  const contentPlan = pageIntent ? createPageContentPlan(fixturePage, pageIntent, pageSourceSet) : null;
+  const overviewContract = createGeneratedOverviewContract(fixturePage, versionLabel, pageIntent, contentPlan, pageSourceSet);
   if (overviewContract) {
     return fillContractToPageModel(overviewContract, variant);
   }
 
-  const dataContract = createManualDataContract(fixturePage, versionLabel, pageIntent, contentPlan);
+  const dataContract = createManualDataContract(fixturePage, versionLabel, pageIntent, contentPlan, pageSourceSet);
   if (dataContract) {
     return fillContractToPageModel(dataContract, variant);
   }
 
-  const caseContract = createGeneratedCaseContract(fixturePage, versionLabel, pageIntent, contentPlan);
+  const caseContract = createGeneratedCaseContract(fixturePage, versionLabel, pageIntent, contentPlan, pageSourceSet);
   if (caseContract) {
     return fillContractToPageModel(caseContract, variant);
   }
 
-  const summaryContract = createGeneratedSummaryContract(fixturePage, versionLabel, pageIntent, contentPlan);
+  const summaryContract = createGeneratedSummaryContract(fixturePage, versionLabel, pageIntent, contentPlan, pageSourceSet);
   if (summaryContract) {
     return fillContractToPageModel(summaryContract, variant);
   }

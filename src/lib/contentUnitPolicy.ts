@@ -1,5 +1,6 @@
 import type { UserProvidedContentBlock } from "@/types/domain";
 import type {
+  PageSourceSet,
   PageContentPlanAssembly,
   PageContentSlotBinding,
   PageContentPolicyUnitType,
@@ -106,6 +107,32 @@ function createSourceRef(slotType: PageContentSlotBinding["slotType"], block: Us
   }
 }
 
+function createSourceRefFromFormalSource(
+  slotType: Extract<PageContentSlotBinding["slotType"], "image" | "chart">,
+  pageSourceSet: PageSourceSet,
+  index: number,
+): PageContentSourceRef | undefined {
+  if (slotType === "image") {
+    const source = pageSourceSet.imageAssets[index];
+    return source
+      ? {
+          sourceId: source.id,
+          sourceKind: "image-source",
+          label: source.label,
+        }
+      : undefined;
+  }
+
+  const source = pageSourceSet.chartBriefs[index];
+  return source
+    ? {
+        sourceId: source.id,
+        sourceKind: "chart-source",
+        label: source.label,
+      }
+    : undefined;
+}
+
 function getOutcome(slots: PageContentSlotBinding[]): PageContentUnitOutcome {
   const requiredSlots = slots.filter((slot) => slot.required);
   const filledRequiredSlots = requiredSlots.filter((slot) => slot.filled);
@@ -193,6 +220,49 @@ export function resolveUnitAssemblyFromPolicy(
   };
 }
 
+export function resolveUnitAssemblyFromSourceSet(
+  unitType: Exclude<PageContentPolicyUnitType, "text">,
+  pageSourceSet: PageSourceSet,
+  blocks: UserProvidedContentBlock[],
+  resolvedCount: number,
+): PageContentPlanAssembly {
+  const policy = getContentUnitPolicy(unitType);
+  const textBlocks = blocks.filter((block) => block.type === "text");
+
+  const resolvedUnits: PageContentUnitBinding[] = Array.from({ length: resolvedCount }, (_, index) => {
+    const unitId = createUnitId(unitType, index);
+    const slots = policy.slots.map((slotPolicy) => {
+      if (slotPolicy.slotType === "image" || slotPolicy.slotType === "chart") {
+        return buildSlotBinding(
+          slotPolicy,
+          unitId,
+          index,
+          createSourceRefFromFormalSource(slotPolicy.slotType, pageSourceSet, index),
+        );
+      }
+
+      const sourceBlock = textBlocks[index];
+      const source = sourceBlock ? createSourceRef(slotPolicy.slotType, sourceBlock, index) : undefined;
+      return buildSlotBinding(slotPolicy, unitId, index, source);
+    });
+
+    return {
+      unitId,
+      unitType,
+      outcome: getOutcome(slots),
+      slots,
+    };
+  });
+
+  const outcomeSummary = summarizeUnitOutcomes(resolvedUnits);
+  return {
+    fillRule: policy.fillRule,
+    resolvedUnits,
+    partialCount: outcomeSummary.partialCount,
+    unfilledCount: outcomeSummary.unfilledCount,
+  };
+}
+
 export function resolveTextUnitAssemblyFromTextSources(texts: { id: string; label: string }[], resolvedCount: number): PageContentPlanAssembly {
   const policy = getTextUnitPolicy();
   const resolvedUnits: PageContentUnitBinding[] = Array.from({ length: resolvedCount }, (_, index) => {
@@ -228,6 +298,15 @@ export function resolveTextUnitAssemblyFromTextSources(texts: { id: string; labe
     partialCount: outcomeSummary.partialCount,
     unfilledCount: outcomeSummary.unfilledCount,
   };
+}
+
+export function resolveTextUnitAssemblyFromSourceSet(pageSourceSet: PageSourceSet, resolvedCount: number): PageContentPlanAssembly {
+  const texts = pageSourceSet.textFragments.map((item) => ({
+    id: item.id,
+    label: item.label,
+  }));
+
+  return resolveTextUnitAssemblyFromTextSources(texts, resolvedCount);
 }
 
 export function summarizeUnitOutcomes(bindings: PageContentUnitBinding[]) {
