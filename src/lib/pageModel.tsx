@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { getContentUnitPolicy, getTextUnitPolicy, resolveTextUnitAssemblyFromTextSources, resolveUnitAssemblyFromPolicy } from "@/lib/contentUnitPolicy";
-import { generateOverviewContractInput, generateSummaryContractInput } from "@/lib/realContent";
+import { generateCaseContractInput, generateDataContractInput, generateOverviewContractInput, generateSummaryContractInput } from "@/lib/realContent";
 import type { Page, UserProvidedContentBlock } from "@/types/domain";
 import type {
   GeneratedCaseContractInput,
@@ -15,9 +15,6 @@ import type {
   PageIntentContentArea,
   PageModel,
   PageModelBlock,
-  PageModelChartDatum,
-  PageModelMetricItem,
-  PageModelTableData,
   SupportedPageType,
 } from "@/types/pageModel";
 
@@ -30,37 +27,9 @@ function createBlockId(prefix: string, index: number) {
   return `${prefix}-${index + 1}`;
 }
 
-function splitParagraphs(value: string) {
-  return value
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
-function summarize(value: string, fallback: string) {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return fallback;
-  }
-
-  return trimmed.length > 96 ? `${trimmed.slice(0, 96)}...` : trimmed;
-}
-
 function clampText(value: string, limit: number, fallback = "") {
   const trimmed = value.trim() || fallback;
   return trimmed.length > limit ? `${trimmed.slice(0, limit)}...` : trimmed;
-}
-
-function ensureItems<T>(items: T[], fallbackItems: T[], minimum: number) {
-  const next = items.slice();
-  let cursor = 0;
-
-  while (next.length < minimum && fallbackItems.length > 0) {
-    next.push(fallbackItems[cursor % fallbackItems.length]);
-    cursor += 1;
-  }
-
-  return next;
 }
 
 function buildOverviewTheme(seed: number) {
@@ -459,152 +428,17 @@ export function createGeneratedOverviewContract(page: Page, versionLabel: string
   return generateOverviewContractInput(page, versionLabel, effectiveIntent, effectivePlan);
 }
 
-function getTextBlocks(blocks: UserProvidedContentBlock[]) {
-  return blocks.filter((block) => block.type === "text").map((block) => block.text.trim()).filter(Boolean);
-}
-
-function getChartBlock(blocks: UserProvidedContentBlock[]) {
-  return blocks.find((block) => block.type === "chart_desc");
-}
-
-function getTableBlock(blocks: UserProvidedContentBlock[]) {
-  return blocks.find((block) => block.type === "table");
-}
-
-function normalizeTableData(table: UserProvidedContentBlock | undefined): PageModelTableData {
-  if (table?.type === "table") {
-    const columns = (table.columns.length ? table.columns : ["指标", "数值"]).slice(0, 4).map((column) => clampText(column, 12, "字段"));
-    const rows = (table.rows.length ? table.rows : [["样本", "待补充"]])
-      .slice(0, 4)
-      .map((row) => columns.map((_, index) => clampText(String(row[index] ?? ""), 22, "—")));
-
-    return {
-      columns,
-      rows,
-    };
-  }
-
-  return {
-    columns: ["指标", "数值"],
-    rows: [["样本", "待补充"]],
-  };
-}
-
-function deriveMetricsFromTable(table: PageModelTableData): PageModelMetricItem[] {
-  const metrics = table.rows.slice(0, 3).map((row, index) => ({
-    id: createBlockId("metric", index),
-    label: row[0] || `指标 ${index + 1}`,
-    value: row[1] || row[0] || "待补充",
-    detail: row.slice(2).filter(Boolean).join(" / ") || "来自手工填写数据",
-  }));
-
-  return metrics.length
-    ? metrics
-    : [
-        { id: "metric-1", label: "样本指标", value: "待补充", detail: "来自手工填写数据" },
-        { id: "metric-2", label: "趋势对比", value: "待补充", detail: "可继续补充更多数据项" },
-      ];
-}
-
-function deriveChartSeriesFromTable(table: PageModelTableData): PageModelChartDatum[] {
-  return table.rows.slice(0, 4).map((row, index) => {
-    const rawValue = row.find((cell, cellIndex) => cellIndex > 0 && /\d/.test(cell)) ?? String((index + 2) * 18);
-    const numeric = Number.parseFloat(rawValue.replace(/[^\d.-]/g, "")) || (index + 2) * 18;
-    return {
-      id: createBlockId("series", index),
-      label: row[0] || `项 ${index + 1}`,
-      value: numeric,
-    };
-  });
-}
-
 export function createManualDataContract(page: Page, versionLabel: string, pageIntent?: PageIntent | null, contentPlan?: PageContentPlan | null): ManualDataContractInput | null {
   if (resolveSupportedPageType(page) !== "data") {
     return null;
   }
-
-  const textBlocks = getTextBlocks(page.userProvidedContentBlocks);
-  const chartBlock = getChartBlock(page.userProvidedContentBlocks);
-  const tableBlock = getTableBlock(page.userProvidedContentBlocks);
-  const table = normalizeTableData(tableBlock);
-  const notes = textBlocks.length ? textBlocks : splitParagraphs(page.outlineText);
-  const enrichedNotes =
-    notes.length > 1
-      ? notes
-      : [
-          notes[0] || "当前页暂无更多手工说明。",
-          "图表用于承接核心指标变化，表格用于补足读者需要带走的具体数值。",
-          "来源与备注区用于说明当前数据的整理口径和适用范围。",
-        ];
   const effectiveIntent = pageIntent ?? createPageIntent(page);
   const effectivePlan = contentPlan ?? (effectiveIntent ? createPageContentPlan(page, effectiveIntent) : null);
-  const chartPairUnit = effectivePlan?.units.find((unit) => unit.unitType === "chartExplanationPair");
-  const metricsUnit = effectivePlan?.units.find((unit) => unit.unitType === "metric");
-  const tableUnit = effectivePlan?.units.find((unit) => unit.unitType === "table");
-  const chartPairAssembly = chartPairUnit?.assembly;
-  const preferredChartCount = chartPairUnit?.resolvedCount ?? effectiveIntent?.preferredChartCount ?? 1;
-  const shouldKeepTable = (tableUnit?.requestedCount ?? 1) > 0;
-  const metricCount = metricsUnit?.resolvedCount ?? 3;
-  const dataTakeaways = ensureItems(
-    [
-      `指标区负责快速给出本页最值得带走的 ${metricCount} 个数字。`,
-      `图表区需要明确容纳 ${preferredChartCount} 组 chart + explanation 单元，而不是只保留图表倾向。`,
-      shouldKeepTable ? "表格区负责补足需要被准确带走的明细数据。" : "当前页允许降级为图表主导，不强行展开过多表格细节。",
-    ],
-    ["来源与备注区负责说明当前数据的整理口径与边界。"],
-    4,
-  );
-  const chartExplanationPairs = Array.from({ length: preferredChartCount }, (_, index) => ({
-    label: `图表说明单元 ${index + 1}`,
-    outcome: chartPairAssembly?.resolvedUnits?.[index]?.outcome,
-    chartSlotLabel: `chart slot ${index + 1}`,
-    explanationSlotLabel: `explanation slot ${index + 1}`,
-    slotBindings: chartPairAssembly?.resolvedUnits?.[index]?.slots ?? [],
-  }));
-  const sourceLines = ensureItems(
-    [
-      clampText(page.userConstraints, 28, "保留一块图表说明和一块表格信息。"),
-      "本页优先保留读者真正需要带走的结构化数字，不把原始数据明细全部放进同一页。",
-    ],
-    ["当前版本仍是轻量 mock 数据输入，后续可替换为更正式的结构化来源。"],
-    2,
-  );
+  if (!effectiveIntent) {
+    return null;
+  }
 
-  return {
-    sourceKind: "manual",
-    pageType: "data",
-    pageId: page.id,
-    versionLabel,
-    title: page.pageType,
-    summary: summarize(page.outlineText, "当前数据页用于承载指标、图表说明与表格信息。"),
-    metrics: deriveMetricsFromTable(table).slice(0, Math.max(1, metricCount)),
-    chartTitle: chartBlock?.type === "chart_desc" ? chartBlock.description || "核心指标变化" : "核心指标变化",
-    chartSeries: deriveChartSeriesFromTable(table).slice(0, Math.max(1, preferredChartCount + 2)),
-    chartSummary:
-      chartBlock?.type === "chart_desc"
-        ? chartBlock.description || "图表用于解释关键指标的变化关系。"
-        : "图表用于解释关键指标的变化关系。",
-    chartExplanationPairs,
-    chartExplanationPairStatus: {
-      requestedCount: chartPairUnit?.requestedCount ?? preferredChartCount,
-      resolvedCount: chartPairUnit?.resolvedCount ?? preferredChartCount,
-      filledCount: chartPairUnit?.filledCount ?? preferredChartCount,
-      partialCount: chartPairAssembly?.partialCount ?? 0,
-      unfilledCount: chartPairAssembly?.unfilledCount ?? 0,
-      fillRule: chartPairAssembly?.fillRule ?? chartPairUnit?.fillRule ?? "all-required-slots",
-    },
-    tableTitle: shouldKeepTable ? "手工填写数据表" : "摘要数据表",
-    table: shouldKeepTable
-      ? table
-      : {
-          columns: table.columns.slice(0, 2),
-          rows: table.rows.slice(0, 3).map((row) => row.slice(0, 2)),
-        },
-    sourceNote: summarize(page.userConstraints, "当前数据来源为手工整理输入，后续可替换为更正式的数据来源说明。"),
-    sourceLines,
-    dataTakeaways,
-    notes: effectiveIntent?.textDensity === "low" ? enrichedNotes.slice(0, 2) : enrichedNotes,
-  };
+  return generateDataContractInput(page, versionLabel, effectiveIntent, effectivePlan);
 }
 
 export function createGeneratedCaseContract(page: Page, versionLabel: string, pageIntent?: PageIntent | null, contentPlan?: PageContentPlan | null): GeneratedCaseContractInput | null {
@@ -614,78 +448,11 @@ export function createGeneratedCaseContract(page: Page, versionLabel: string, pa
 
   const effectiveIntent = pageIntent ?? createPageIntent(page);
   const effectivePlan = contentPlan ?? (effectiveIntent ? createPageContentPlan(page, effectiveIntent) : null);
-  const imageTextUnit = effectivePlan?.units.find((unit) => unit.unitType === "imageTextPair");
-  const imageTextAssembly = imageTextUnit?.assembly;
-  const sourceParagraphs = splitParagraphs(page.outlineText);
-  const scenario = sourceParagraphs[0] || "案例页先建立对象与场景，让读者知道这页在讲谁、在什么背景下发生了什么。";
-  const challenge =
-    sourceParagraphs[1] ||
-    summarize(page.userConstraints, "案例页需要先把问题背景收清，再进入关键做法与结果。");
-  const actionSteps = ensureItems(
-    [
-      "先识别原本流程里最影响效率或结果质量的环节。",
-      "围绕关键环节重新组织模型能力、人工审核和任务流转方式。",
-      "把可复用的做法沉淀成可持续复用的页面或工作流模板。",
-    ],
-    ["用更短路径让读者理解这个案例为什么成立。"],
-    3,
-  );
-  const visualCaption =
-    effectiveIntent?.visualPriority === "high"
-      ? `当前页表达倾向为 ${effectiveIntent.expressionMode}，应明确预留案例视觉区，并至少容纳 ${imageTextUnit?.resolvedCount ?? Math.max(1, effectiveIntent.preferredImageCount)} 组图文单元。`
-      : "用一个主视觉区域承接案例对象、场景线索与阅读入口，让案例页先被看见，再被读懂。";
-  const pairCount = imageTextUnit?.resolvedCount ?? Math.max(1, effectiveIntent?.preferredImageCount ?? 1);
-  const imageTextPairs = Array.from({ length: pairCount }, (_, index) => ({
-    label: `图文单元 ${index + 1}`,
-    outcome: imageTextAssembly?.resolvedUnits?.[index]?.outcome,
-    imageSlotLabel: `image slot ${index + 1}`,
-    textSlotLabel: `text slot ${index + 1}`,
-    slotBindings: imageTextAssembly?.resolvedUnits?.[index]?.slots ?? [],
-  }));
+  if (!effectiveIntent) {
+    return null;
+  }
 
-  return {
-    sourceKind: "generated",
-    pageType: "case",
-    pageId: page.id,
-    versionLabel,
-    title: page.pageType,
-    subject: "一个已发生的真实业务场景或典型案例对象",
-    scenario,
-    challenge,
-    actionSteps: effectiveIntent?.textDensity === "low" ? actionSteps.slice(0, 3) : actionSteps,
-    resultSummary: "案例页不只是描述发生了什么，更要交代最终得到的结果、改变量和可被带走的判断。",
-    takeaway: "把案例讲清楚的关键，不是铺满素材，而是让读者理解场景、做法、结果之间的因果链。",
-    visualCaption,
-    imageTextPairs,
-    imageTextPairStatus: {
-      requestedCount: imageTextUnit?.requestedCount ?? pairCount,
-      resolvedCount: imageTextUnit?.resolvedCount ?? pairCount,
-      filledCount: imageTextUnit?.filledCount ?? pairCount,
-      partialCount: imageTextAssembly?.partialCount ?? 0,
-      unfilledCount: imageTextAssembly?.unfilledCount ?? 0,
-      fillRule: imageTextAssembly?.fillRule ?? imageTextUnit?.fillRule ?? "all-required-slots",
-    },
-    outcomeMetrics: [
-      {
-        id: "case-metric-1",
-        label: "图文单元",
-        value: `${pairCount} 组`,
-        detail: "当前页面需要为案例对象、视觉入口和对应说明预留足够容纳能力，避免叙事页退化成纯文本页。",
-      },
-      {
-        id: "case-metric-2",
-        label: "关键动作",
-        value: `${actionSteps.length} 步`,
-        detail: "案例页先让做法结构化，再让结果成立。",
-      },
-      {
-        id: "case-metric-3",
-        label: "阅读结果",
-        value: "可带走",
-        detail: "读者应能明确知道这个案例解决了什么、怎么做、为什么有效。",
-      },
-    ],
-  };
+  return generateCaseContractInput(page, versionLabel, effectiveIntent, effectivePlan);
 }
 
 export function createGeneratedSummaryContract(page: Page, versionLabel: string, pageIntent?: PageIntent | null, _contentPlan?: PageContentPlan | null): GeneratedSummaryContractInput | null {

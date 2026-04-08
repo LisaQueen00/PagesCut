@@ -1,6 +1,14 @@
 import { getPageDisplayLabel } from "@/lib/pageDisplay";
 import type { FinalCompositionPage, GeneratedCoverContent, GeneratedTocContent, Page, Task } from "@/types/domain";
-import type { GeneratedOverviewContractInput, GeneratedSummaryContractInput, PageContentPlan, PageIntent } from "@/types/pageModel";
+import type {
+  GeneratedCaseContractInput,
+  GeneratedOverviewContractInput,
+  GeneratedSummaryContractInput,
+  ManualDataContractInput,
+  PageContentPlan,
+  PageContentSlotBinding,
+  PageIntent,
+} from "@/types/pageModel";
 
 function clampText(value: string, limit: number, fallback = "") {
   const normalized = value.replace(/\s+/g, " ").trim() || fallback;
@@ -19,6 +27,18 @@ function splitSentences(value: string) {
 
 function pickFirstMeaningful(value: string, fallback: string) {
   return splitSentences(value)[0] || fallback;
+}
+
+function ensureItems<T>(items: T[], fallbackItems: T[], minimum: number) {
+  const next = items.slice();
+  let cursor = 0;
+
+  while (next.length < minimum && fallbackItems.length > 0) {
+    next.push(fallbackItems[cursor % fallbackItems.length]);
+    cursor += 1;
+  }
+
+  return next;
 }
 
 function normalizePromptTopic(prompt: string, fallback: string) {
@@ -264,6 +284,298 @@ export function generateSummaryContractInput(
       unfilledCount: textAssembly?.unfilledCount ?? 0,
       fillRule: textAssembly?.fillRule ?? textUnit?.fillRule ?? "all-required-slots",
     },
+  };
+}
+
+function getSlotBindingLabel(bindings: PageContentSlotBinding[], slotType: PageContentSlotBinding["slotType"]) {
+  return bindings.find((binding) => binding.slotType === slotType)?.source?.label ?? "";
+}
+
+function getTextBlockValueById(page: Page, sourceId: string | undefined) {
+  if (!sourceId) {
+    return "";
+  }
+
+  const block = page.userProvidedContentBlocks.find((item) => item.id === sourceId);
+  return block?.type === "text" ? block.text.trim() : "";
+}
+
+function getChartBlockValueById(page: Page, sourceId: string | undefined) {
+  if (!sourceId) {
+    return "";
+  }
+
+  const block = page.userProvidedContentBlocks.find((item) => item.id === sourceId);
+  return block?.type === "chart_desc" ? block.description.trim() : "";
+}
+
+function getImageBlockById(page: Page, sourceId: string | undefined) {
+  if (!sourceId) {
+    return undefined;
+  }
+
+  const block = page.userProvidedContentBlocks.find((item) => item.id === sourceId);
+  return block?.type === "image" ? block : undefined;
+}
+
+function getTableBlock(page: Page) {
+  const block = page.userProvidedContentBlocks.find((item) => item.type === "table");
+  return block?.type === "table" ? block : undefined;
+}
+
+function deriveTableData(page: Page) {
+  const tableBlock = getTableBlock(page);
+  const columns = (tableBlock?.columns?.length ? tableBlock.columns : ["指标", "本月", "变化"]).slice(0, 4);
+  const rows = (tableBlock?.rows?.length ? tableBlock.rows : [["核心指标", "待补充", "观察中"]]).slice(0, 4);
+  return {
+    columns,
+    rows,
+  };
+}
+
+function deriveChartSeriesFromDerivedTable(page: Page) {
+  const table = deriveTableData(page);
+  return table.rows.slice(0, 4).map((row, index) => {
+    const rawValue = row.find((cell, cellIndex) => cellIndex > 0 && /\d/.test(cell)) ?? String((index + 2) * 18);
+    const numeric = Number.parseFloat(rawValue.replace(/[^\d.-]/g, "")) || (index + 2) * 18;
+    return {
+      id: `data-series-${index + 1}`,
+      label: row[0] || `项 ${index + 1}`,
+      value: numeric,
+    };
+  });
+}
+
+function deriveMetricsFromDerivedTable(page: Page, count: number) {
+  const table = deriveTableData(page);
+  return table.rows.slice(0, Math.max(1, count)).map((row, index) => ({
+    id: `data-metric-${index + 1}`,
+    label: row[0] || `指标 ${index + 1}`,
+    value: row[1] || row[0] || "待补充",
+    detail: row.slice(2).filter(Boolean).join(" / ") || "来自当前数据支撑页输入",
+  }));
+}
+
+export function generateDataContractInput(
+  page: Page,
+  versionLabel: string,
+  pageIntent: PageIntent,
+  contentPlan: PageContentPlan | null,
+): ManualDataContractInput {
+  const chartPairUnit = contentPlan?.units.find((unit) => unit.unitType === "chartExplanationPair");
+  const metricsUnit = contentPlan?.units.find((unit) => unit.unitType === "metric");
+  const tableUnit = contentPlan?.units.find((unit) => unit.unitType === "table");
+  const chartPairAssembly = chartPairUnit?.assembly;
+  const resolvedPairCount = chartPairUnit?.resolvedCount ?? Math.max(1, pageIntent.preferredChartCount || 1);
+  const metricCount = metricsUnit?.resolvedCount ?? 3;
+  const shouldKeepTable = (tableUnit?.requestedCount ?? 1) > 0;
+  const derivedTable = deriveTableData(page);
+  const derivedMetrics = deriveMetricsFromDerivedTable(page, metricCount);
+  const derivedSeries = deriveChartSeriesFromDerivedTable(page);
+  const chartExplanationPairs = Array.from({ length: resolvedPairCount }, (_, index) => {
+    const binding = chartPairAssembly?.resolvedUnits?.[index];
+    return {
+      label: `图表说明单元 ${index + 1}`,
+      outcome: binding?.outcome,
+      chartSlotLabel: `chart slot ${index + 1}`,
+      explanationSlotLabel: `explanation slot ${index + 1}`,
+      slotBindings: binding?.slots ?? [],
+    };
+  });
+
+  const chartSourceValues = chartExplanationPairs.map((pair) => {
+    const sourceId = pair.slotBindings.find((binding) => binding.slotType === "chart")?.source?.sourceId;
+    return getChartBlockValueById(page, sourceId);
+  }).filter(Boolean);
+  const explanationValues = chartExplanationPairs.map((pair) => {
+    const sourceId = pair.slotBindings.find((binding) => binding.slotType === "explanation")?.source?.sourceId;
+    return getTextBlockValueById(page, sourceId);
+  }).filter(Boolean);
+
+  const chartTitle =
+    chartSourceValues[0] ||
+    "核心指标变化";
+  const chartSummary =
+    explanationValues[0] ||
+    "当前图表说明仍由规则生成补位，说明 chart 已成立但 explanation source formalization 还未完全深化。";
+  const sourceLines = [
+    `图表配对状态：requested ${chartPairUnit?.requestedCount ?? resolvedPairCount} / resolved ${chartPairUnit?.resolvedCount ?? resolvedPairCount} / filled ${chartPairUnit?.filledCount ?? 0}。`,
+    chartPairAssembly?.partialCount
+      ? "当前存在 partial chartExplanationPair，说明图表与说明文本的 source binding 已经开始暴露现实边界。"
+      : "当前 chartExplanationPair 在本页已完成承接，图表与说明文本绑定关系成立。",
+    shouldKeepTable
+      ? "表格继续作为图表之外的结构化数据补充，而不是独立的旁路内容。"
+      : "当前表格区允许降级，页面仍以图表支撑为主。",
+  ];
+
+  const dataTakeaways = [
+    `图表说明单元当前承接 ${resolvedPairCount} 组，页面必须把 chart 与 explanation 的关系显式暴露出来。`,
+    explanationValues[0]
+      ? `首组说明文本已来自正式 source binding：${clampText(explanationValues[0], 40, "说明文本已绑定")}`
+      : "当前 explanation source 不足时，页面虽能继续成立，但会显式暴露 source formalization 的缺口。",
+    pageIntent.allowDegrade
+      ? "当前 data 页允许在供给不足时降级承接，但不会把缺失解释偷偷抹平。"
+      : "当前 data 页不允许随意降级，因此 unresolved / partial 状态必须被看见。",
+    "metrics、chart、table、source note 现在都围绕同一条 data contract 组织，而不是各自独立拼装。",
+  ];
+
+  return {
+    sourceKind: "manual",
+    pageType: "data",
+    pageId: page.id,
+    versionLabel,
+    title: page.pageType,
+    summary: `${pickFirstMeaningful(page.outlineText, page.pageType)}，本页当前按数据支撑页而不是综述页来组织图表、说明与表格。`,
+    metrics: derivedMetrics,
+    chartTitle,
+    chartSeries: derivedSeries.slice(0, Math.max(1, resolvedPairCount + 2)),
+    chartSummary,
+    chartExplanationPairs,
+    chartExplanationPairStatus: {
+      requestedCount: chartPairUnit?.requestedCount ?? resolvedPairCount,
+      resolvedCount: chartPairUnit?.resolvedCount ?? resolvedPairCount,
+      filledCount: chartPairUnit?.filledCount ?? 0,
+      partialCount: chartPairAssembly?.partialCount ?? 0,
+      unfilledCount: chartPairAssembly?.unfilledCount ?? 0,
+      fillRule: chartPairAssembly?.fillRule ?? chartPairUnit?.fillRule ?? "all-required-slots",
+    },
+    tableTitle: shouldKeepTable ? "结构化数据表" : "摘要数据表",
+    table: shouldKeepTable
+      ? derivedTable
+      : {
+          columns: derivedTable.columns.slice(0, 2),
+          rows: derivedTable.rows.slice(0, 3).map((row) => row.slice(0, 2)),
+        },
+    sourceNote: `当前 chart source 来自 ${chartSourceValues.length} 个图表说明块，explanation source 来自 ${explanationValues.length} 个文本块。`,
+    sourceLines,
+    dataTakeaways,
+    notes: chartExplanationPairs.map((pair, index) => {
+      const chartLabel = getSlotBindingLabel(pair.slotBindings, "chart") || `chart slot ${index + 1}`;
+      const explanationLabel = getSlotBindingLabel(pair.slotBindings, "explanation") || `explanation slot ${index + 1}`;
+      return `${pair.label}：${chartLabel} -> ${explanationLabel}（${pair.outcome ?? "unfilled"}）`;
+    }),
+  };
+}
+
+function buildCaseBaseTexts(page: Page) {
+  const textBlocks = page.userProvidedContentBlocks
+    .filter((block): block is Extract<Page["userProvidedContentBlocks"][number], { type: "text" }> => block.type === "text")
+    .map((block) => block.text.trim())
+    .filter(Boolean);
+  const fallbacks = [page.outlineText, page.userConstraints, page.styleText].map((item) => item.trim()).filter(Boolean);
+  const combined = [...textBlocks, ...fallbacks];
+
+  return {
+    primary: combined[0] || "案例页先交代对象与场景，再进入过程和结果。",
+    secondary: combined[1] || page.userConstraints.trim() || "案例页需要把关键动作与结果讲清楚。",
+    tertiary: combined[2] || page.styleText.trim() || "图文配对必须帮助读者理解叙事推进。",
+  };
+}
+
+export function generateCaseContractInput(
+  page: Page,
+  versionLabel: string,
+  pageIntent: PageIntent,
+  contentPlan: PageContentPlan | null,
+): GeneratedCaseContractInput {
+  const imageTextUnit = contentPlan?.units.find((unit) => unit.unitType === "imageTextPair");
+  const imageTextAssembly = imageTextUnit?.assembly;
+  const pairCount = imageTextUnit?.resolvedCount ?? Math.max(1, pageIntent.preferredImageCount || 1);
+  const baseTexts = buildCaseBaseTexts(page);
+  const imageTextPairs = Array.from({ length: pairCount }, (_, index) => {
+    const binding = imageTextAssembly?.resolvedUnits?.[index];
+    return {
+      label: `图文单元 ${index + 1}`,
+      outcome: binding?.outcome,
+      imageSlotLabel: `image slot ${index + 1}`,
+      textSlotLabel: `text slot ${index + 1}`,
+      slotBindings: binding?.slots ?? [],
+    };
+  });
+
+  const imageValues = imageTextPairs.map((pair) => {
+    const sourceId = pair.slotBindings.find((binding) => binding.slotType === "image")?.source?.sourceId;
+    return getImageBlockById(page, sourceId);
+  }).filter(Boolean);
+  const textValues = imageTextPairs.map((pair) => {
+    const sourceId = pair.slotBindings.find((binding) => binding.slotType === "text")?.source?.sourceId;
+    return getTextBlockValueById(page, sourceId);
+  }).filter(Boolean);
+  const leadImage = imageValues[0];
+  const subject =
+    clampText(textValues[0] || pickFirstMeaningful(page.outlineText, page.pageType), 40, page.pageType);
+  const scenario =
+    textValues[0] ||
+    `${pickFirstMeaningful(page.outlineText, page.pageType)}，这一页先交代案例对象、所在场景和为什么值得看。`;
+  const challenge =
+    textValues[1] ||
+    `${pickFirstMeaningful(page.userConstraints, baseTexts.secondary)}，因此案例页不能只罗列素材，而要说明为什么要这样组织做法。`;
+  const actionSteps = ensureItems(
+    [
+      textValues[1] || "先识别案例里最关键的流程问题或组织瓶颈。",
+      textValues[2] || "再把图像线索与文字说明一一配对，保证叙事推进不是跳跃发生。",
+      `最后把结果收束到明确判断：${pickFirstMeaningful(baseTexts.tertiary, "图文结构需要服务结果理解。")}`,
+    ],
+    ["图文单元不足时，也要保持案例叙事主线不断裂。"],
+    3,
+  );
+  const resultSummary =
+    `${pickFirstMeaningful(baseTexts.secondary, "案例页不只是交代过程，更要让读者知道最终结果为什么成立。")}。`;
+  const takeaway =
+    `${pickFirstMeaningful(baseTexts.tertiary, "图文配对必须服务叙事推进，而不是把图和文各自摆上去。")}。`;
+  const visualCaption =
+    leadImage
+      ? `${leadImage.caption || leadImage.altText || "案例主视觉"}，当前主视觉已来自 imageTextPair 的正式 image binding。`
+      : pageIntent.visualPriority === "high"
+        ? `当前页表达倾向为 ${pageIntent.expressionMode}，应明确预留案例视觉区，并至少容纳 ${pairCount} 组图文单元。`
+        : "案例页当前仍需保留一个主视觉入口，用于承接对象、场景和阅读起点。";
+
+  return {
+    sourceKind: "generated",
+    pageType: "case",
+    pageId: page.id,
+    versionLabel,
+    title: page.pageType,
+    subject,
+    scenario,
+    challenge,
+    actionSteps: pageIntent.textDensity === "low" ? actionSteps.slice(0, 3) : actionSteps,
+    resultSummary,
+    takeaway,
+    visualCaption,
+    imageTextPairs,
+    imageTextPairStatus: {
+      requestedCount: imageTextUnit?.requestedCount ?? pairCount,
+      resolvedCount: imageTextUnit?.resolvedCount ?? pairCount,
+      filledCount: imageTextUnit?.filledCount ?? 0,
+      partialCount: imageTextAssembly?.partialCount ?? 0,
+      unfilledCount: imageTextAssembly?.unfilledCount ?? 0,
+      fillRule: imageTextAssembly?.fillRule ?? imageTextUnit?.fillRule ?? "all-required-slots",
+    },
+    outcomeMetrics: [
+      {
+        id: "case-metric-1",
+        label: "图文单元",
+        value: `${pairCount} 组`,
+        detail: `当前 assembly：requested ${imageTextUnit?.requestedCount ?? pairCount} / filled ${imageTextUnit?.filledCount ?? 0}`,
+      },
+      {
+        id: "case-metric-2",
+        label: "图片来源",
+        value: `${imageValues.length} 张`,
+        detail: imageValues.length
+          ? "主视觉与图文单元图片已来自正式 image binding。"
+          : "当前 image source 不足时，会显式暴露 imageTextPair 的供给边界。",
+      },
+      {
+        id: "case-metric-3",
+        label: "文本来源",
+        value: `${textValues.length} 段`,
+        detail: textValues.length
+          ? "说明文本已通过正式 text binding 进入案例叙事。"
+          : "当前 text source 不足时，案例页会暴露叙事链补位而不是偷偷抹平。",
+      },
+    ],
   };
 }
 

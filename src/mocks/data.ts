@@ -218,6 +218,100 @@ function buildPromptDrivenSummary(prompt: string, workType: WorkType) {
   };
 }
 
+function buildPromptDrivenData(prompt: string, workType: WorkType) {
+  const normalizedTopic = prompt
+    .replace(/^(请|帮我|我想|希望|准备|需要)/, "")
+    .replace(/^(生成|做|制作|产出)/, "")
+    .replace(/^(一期|一份|一个)/, "")
+    .trim();
+  const topic = clampText(normalizedTopic || prompt, 24, workType === "magazine" ? "本期主题" : "当前主题");
+
+  return {
+    pageType: workType === "magazine" ? "数据页" : "数据支撑页",
+    outlineText: `围绕 ${topic} 提炼一页数据支撑内容，明确图表主结论、说明文本和表格补充之间的关系。`,
+    styleText: workType === "magazine" ? "图表为主，但说明文字必须帮助读者读懂变化关系" : "汇报型数据页应让图表、解释和表格形成清晰支撑链",
+    userConstraints: "至少保留一组图表与说明文本配对，并让表格继续承担结构化补充。",
+    userProvidedContentBlocks: [
+      {
+        id: createId("block"),
+        type: "text" as const,
+        text: `说明重点：${topic} 当前最值得带走的是关键指标变化关系，而不是孤立数字。`,
+      },
+      {
+        id: createId("block"),
+        type: "chart_desc" as const,
+        description: `图表说明：展示 ${topic} 的核心指标变化，并突出最值得关注的转折点。`,
+        chartTypeHint: workType === "magazine" ? "column" : "bar",
+      },
+      {
+        id: createId("block"),
+        type: "table" as const,
+        rawInput: `指标,本期,对比项\n核心指标A,128,+16%\n核心指标B,94,-8%\n核心指标C,18%,+5pt`,
+        columns: ["指标", "本期", "对比项"],
+        rows: [
+          ["核心指标A", "128", "+16%"],
+          ["核心指标B", "94", "-8%"],
+          ["核心指标C", "18%", "+5pt"],
+        ],
+      },
+    ],
+  };
+}
+
+function buildPromptDrivenCase(prompt: string, workType: WorkType) {
+  const normalizedTopic = prompt
+    .replace(/^(请|帮我|我想|希望|准备|需要)/, "")
+    .replace(/^(生成|做|制作|产出)/, "")
+    .replace(/^(一期|一份|一个)/, "")
+    .trim();
+  const topic = clampText(normalizedTopic || prompt, 24, workType === "magazine" ? "本期主题" : "当前主题");
+
+  return {
+    pageType: workType === "magazine" ? "案例拆解" : "案例页",
+    outlineText: `围绕 ${topic} 选择一个真实业务场景，说明对象、问题、关键动作与最终结果之间的因果关系。`,
+    styleText: workType === "magazine" ? "图文配对清晰，案例叙事要能一眼进入" : "汇报型案例页应让场景、动作、结果形成连续叙事",
+    userConstraints: "至少保留两组 imageTextPair，并让主视觉、说明文本和结果判断互相对齐。",
+    userProvidedContentBlocks: [
+      {
+        id: createId("block"),
+        type: "image" as const,
+        imageUrl: "mock://case-topic-1",
+        altText: `${topic} 案例场景`,
+        caption: `${topic} 的案例对象与实际使用场景`,
+      },
+      {
+        id: createId("block"),
+        type: "image" as const,
+        imageUrl: "mock://case-topic-2",
+        altText: `${topic} 关键步骤`,
+        caption: `${topic} 的关键步骤与流程界面`,
+      },
+      {
+        id: createId("block"),
+        type: "image" as const,
+        imageUrl: "mock://case-topic-3",
+        altText: `${topic} 结果呈现`,
+        caption: `${topic} 的结果呈现与最终效果`,
+      },
+      {
+        id: createId("block"),
+        type: "text" as const,
+        text: `案例对象：一个围绕 ${topic} 已经把模型能力接入实际工作流的团队。`,
+      },
+      {
+        id: createId("block"),
+        type: "text" as const,
+        text: `关键动作：先识别 ${topic} 场景里的流程问题，再把模型能力与人工审核串成稳定路径。`,
+      },
+      {
+        id: createId("block"),
+        type: "text" as const,
+        text: `结果判断：${topic} 相关流程在效率和一致性上都得到提升，因此案例页应把结果和做法明确对应起来。`,
+      },
+    ],
+  };
+}
+
 const variantLeadTexts = [
   [
     "本版先把最重要的判断与摘要放到最上方，让读者在进入正文前先完成一轮快速理解。",
@@ -1407,6 +1501,8 @@ function createMockPages(taskId: string, mockPageCount: number, prompt: string, 
   // Directory / TOC is intentionally excluded from the initial mock page structure.
   // In the real workflow it should be derived after structure confirmation, not hardcoded up front.
   const dynamicOverview = buildPromptDrivenOverview(prompt, workType);
+  const dynamicData = buildPromptDrivenData(prompt, workType);
+  const dynamicCase = buildPromptDrivenCase(prompt, workType);
   const dynamicSummary = buildPromptDrivenSummary(prompt, workType);
   return MOCK_INITIAL_PAGE_BLUEPRINTS.slice(0, mockPageCount).map((blueprint, index) => ({
     id: createId("page"),
@@ -1415,15 +1511,15 @@ function createMockPages(taskId: string, mockPageCount: number, prompt: string, 
     renderSeed: 0,
     pageKind: blueprint.pageKind,
     pageRole: blueprint.pageRole,
-    pageType: index === 0 ? dynamicOverview.pageType : index === 3 ? dynamicSummary.pageType : blueprint.pageType,
-    outlineText: index === 0 ? dynamicOverview.outlineText : index === 3 ? dynamicSummary.outlineText : blueprint.outlineText,
+    pageType: index === 0 ? dynamicOverview.pageType : index === 1 ? dynamicData.pageType : index === 2 ? dynamicCase.pageType : index === 3 ? dynamicSummary.pageType : blueprint.pageType,
+    outlineText: index === 0 ? dynamicOverview.outlineText : index === 1 ? dynamicData.outlineText : index === 2 ? dynamicCase.outlineText : index === 3 ? dynamicSummary.outlineText : blueprint.outlineText,
     sourceMode: blueprint.sourceMode,
     expressionMode: blueprint.expressionMode,
-    styleText: index === 0 ? dynamicOverview.styleText : index === 3 ? dynamicSummary.styleText : blueprint.styleText,
-    userConstraints: index === 0 ? dynamicOverview.userConstraints : index === 3 ? dynamicSummary.userConstraints : blueprint.userConstraints,
+    styleText: index === 0 ? dynamicOverview.styleText : index === 1 ? dynamicData.styleText : index === 2 ? dynamicCase.styleText : index === 3 ? dynamicSummary.styleText : blueprint.styleText,
+    userConstraints: index === 0 ? dynamicOverview.userConstraints : index === 1 ? dynamicData.userConstraints : index === 2 ? dynamicCase.userConstraints : index === 3 ? dynamicSummary.userConstraints : blueprint.userConstraints,
     isConfirmed: false,
     isSaved: index === 0,
-    userProvidedContentBlocks: blueprint.userProvidedContentBlocks,
+    userProvidedContentBlocks: index === 1 ? dynamicData.userProvidedContentBlocks : index === 2 ? dynamicCase.userProvidedContentBlocks : blueprint.userProvidedContentBlocks,
     coverMeta: blueprint.coverMeta,
   }));
 }
