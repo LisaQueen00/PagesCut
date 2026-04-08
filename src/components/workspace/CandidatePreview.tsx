@@ -1,3 +1,4 @@
+import { ResponsiveHtmlPreview } from "@/lib/htmlPreview";
 import { PageModelPreview } from "@/lib/pageModel";
 import type { PageVersion } from "@/types/domain";
 import type { PageModel } from "@/types/pageModel";
@@ -40,7 +41,7 @@ export function CandidatePreview({
                 <PageModelPreview pageModel={pageModel} maxWidth={760} />
               ) : (
                 // Fallback path for page types that have not migrated to PageModel yet.
-                <div className="w-full max-w-[920px]" dangerouslySetInnerHTML={{ __html: previewHtml }} />
+                <ResponsiveHtmlPreview html={previewHtml} maxWidth={760} />
               )}
             </div>
           </div>

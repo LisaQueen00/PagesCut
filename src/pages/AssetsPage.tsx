@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { getOrderedCompositionPages } from "@/lib/finalComposition";
 import { formatTime } from "@/lib/format";
+import { HtmlPreviewFrame } from "@/lib/htmlPreview";
 import { useAppStore } from "@/store/appStore";
 import type { Asset, FinalCompositionPage } from "@/types/domain";
 
@@ -69,7 +70,6 @@ function PageThumbnail({
   const ratio = getPreviewRatio(exportFormat);
   const frameWidth = exportFormat === "pptx" ? 110 : 86;
   const frameHeight = Math.round(frameWidth / ratio);
-  const scale = frameWidth / 920;
 
   return (
     <button
@@ -79,10 +79,11 @@ function PageThumbnail({
       style={{ width: frameWidth, minWidth: frameWidth, maxWidth: frameWidth }}
     >
       <div className="relative overflow-hidden bg-white" style={{ height: frameHeight }}>
-        <div
-          className="origin-top-left overflow-hidden opacity-85"
-          style={{ width: 920, height: 620, transform: `scale(${scale})` }}
-          dangerouslySetInnerHTML={{ __html: page.previewHtml }}
+        <HtmlPreviewFrame
+          html={page.previewHtml}
+          frameWidth={frameWidth}
+          frameHeight={frameHeight}
+          className="opacity-85"
         />
         <div className="pointer-events-none absolute inset-0 bg-white/28" />
         <div className="pointer-events-none absolute left-1.5 top-1.5 rounded-full bg-slate-950/72 px-1.5 py-0.5 text-[9px] font-medium text-white">
@@ -138,7 +139,6 @@ function PreviewModal({
   const ratio = getPreviewRatio(exportFormat);
   const frameWidth = exportFormat === "pptx" ? 1120 : 760;
   const frameHeight = Math.round(frameWidth / ratio);
-  const scale = frameWidth / 920;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/58 p-4">
@@ -172,15 +172,8 @@ function PreviewModal({
           </button>
 
           <div className="overflow-hidden rounded-[24px] border border-line/70 bg-[#f8fafc] p-4">
-            <div
-              className="mx-auto overflow-hidden rounded-[18px] bg-white shadow-sm"
-              style={{ width: frameWidth, maxWidth: "100%", height: frameHeight }}
-            >
-              <div
-                className="origin-top-left"
-                style={{ width: 920, height: 620, transform: `scale(${scale})` }}
-                dangerouslySetInnerHTML={{ __html: page.previewHtml }}
-              />
+            <div className="mx-auto overflow-hidden rounded-[18px] bg-white shadow-sm" style={{ width: frameWidth, maxWidth: "100%", height: frameHeight }}>
+              <HtmlPreviewFrame html={page.previewHtml} frameWidth={frameWidth} frameHeight={frameHeight} />
             </div>
           </div>
 

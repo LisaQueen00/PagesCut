@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { renderPackagingFormalToHtml } from "@/lib/packagingFormal";
 import { renderPageModelToHtml } from "@/lib/pageModel";
+import { generateCoverContent, generateTocContent, generateTocContentFromComposition } from "@/lib/realContent";
 import { generatePdfFromFinalComposition } from "@/lib/pdfExport";
 import { isValidTaskVersion } from "@/lib/versionValidation";
 import { canEnterCandidatesStage, canEnterExportStage, canEnterHardEditStage, canEnterPackagingStage } from "@/lib/workflowGuards";
@@ -248,6 +249,14 @@ function normalizePackagingPageCandidate(candidate: PackagingPageCandidate): Pac
     promptNote: candidate.promptNote || "初版包装页候选",
     summary: candidate.summary || "包装页候选结果",
     previewHtml: typeof candidate.previewHtml === "string" ? candidate.previewHtml : "",
+    generatedCoverContent:
+      candidate.generatedCoverContent && typeof candidate.generatedCoverContent === "object"
+        ? candidate.generatedCoverContent
+        : undefined,
+    generatedTocContent:
+      candidate.generatedTocContent && typeof candidate.generatedTocContent === "object"
+        ? candidate.generatedTocContent
+        : undefined,
     createdAt: typeof candidate.createdAt === "string" ? candidate.createdAt : new Date().toISOString(),
   };
 }
@@ -475,6 +484,7 @@ function getNextPackagingCandidateNumber(candidates: PackagingPageCandidate[], p
 }
 
 function createPackagingCandidate(
+  task: Task,
   page: Page,
   contentPages: Page[],
   approvedVersion: PageVersion,
@@ -486,13 +496,65 @@ function createPackagingCandidate(
   const candidateNumber = getNextPackagingCandidateNumber(allCandidates, page.id);
   const roleLabel = page.pageRole === "cover" ? "封面方案" : "目录方案";
   const candidateLabel = `${roleLabel} ${candidateNumber}`;
-  const summary =
+  const candidateId = createPackagingCandidateId();
+  const fallbackSummary =
     page.pageRole === "cover"
       ? `围绕刊名、主标题与主视觉节奏生成的${candidateLabel}`
       : `基于已确认内容结构、顺序与标题生成的${candidateLabel}`;
+  const generatedCoverContent =
+    page.pageRole === "cover"
+      ? generateCoverContent(task, page, contentPages, promptNote)
+      : undefined;
+  const generatedTocContent =
+    page.pageRole === "toc"
+      ? generateTocContent(page, contentPages, promptNote)
+      : undefined;
+  const summary = generatedCoverContent?.summary ?? generatedTocContent?.summary ?? fallbackSummary;
+  const previewHtml =
+    page.pageRole === "cover" && generatedCoverContent
+      ? renderPackagingFormalToHtml("cover", {
+          id: `generated-cover-${candidateId}`,
+          taskId: task.id,
+          pageId: page.id,
+          pageRole: "cover",
+          pageType: page.pageType,
+          pageBucket: "front",
+          sourceCandidateId: candidateId,
+          basedOnContentVersionId: approvedVersion.id,
+          candidateLabel,
+          promptNote,
+          summary: generatedCoverContent.summary,
+          title: generatedCoverContent.title,
+          subtitle: generatedCoverContent.subtitle,
+          footerNote: generatedCoverContent.footerNote,
+          kicker: generatedCoverContent.kicker,
+          heroLabel: generatedCoverContent.heroLabel,
+          issueLabel: generatedCoverContent.issueLabel,
+          brandLabel: generatedCoverContent.brandLabel,
+        })
+      : page.pageRole === "toc" && generatedTocContent
+        ? renderPackagingFormalToHtml("toc", {
+            id: `generated-toc-${candidateId}`,
+            taskId: task.id,
+            pageId: page.id,
+            pageRole: "toc",
+            pageType: page.pageType,
+            pageBucket: "front",
+            sourceCandidateId: candidateId,
+            basedOnContentVersionId: approvedVersion.id,
+            candidateLabel,
+            promptNote,
+            summary: generatedTocContent.summary,
+            title: generatedTocContent.title,
+            subtitle: generatedTocContent.subtitle,
+            footerNote: generatedTocContent.footerNote,
+            tocEntries: generatedTocContent.tocEntries,
+            guidanceNote: generatedTocContent.guidanceNote,
+          })
+      : buildPackagingPreviewHtml(page, contentPages, approvedVersion.versionLabel, variantSeed);
 
   return normalizePackagingPageCandidate({
-    id: createPackagingCandidateId(),
+    id: candidateId,
     taskId: page.taskId,
     pageId: page.id,
     pageRole: page.pageRole === "cover" ? "cover" : "toc",
@@ -501,20 +563,22 @@ function createPackagingCandidate(
     summary,
     derivedFromCandidateId,
     basedOnContentVersionId: approvedVersion.id,
-    previewHtml: buildPackagingPreviewHtml(page, contentPages, approvedVersion.versionLabel, variantSeed),
+    previewHtml,
+    generatedCoverContent,
+    generatedTocContent,
     isSelected: true,
     isApproved: false,
     createdAt: new Date().toISOString(),
   });
 }
 
-function createInitialPackagingCandidates(pages: Page[], contentPages: Page[], approvedVersion: PageVersion) {
+function createInitialPackagingCandidates(task: Task, pages: Page[], contentPages: Page[], approvedVersion: PageVersion) {
   const candidates: PackagingPageCandidate[] = [];
 
   pages.forEach((page, index) => {
-    const first = createPackagingCandidate(page, contentPages, approvedVersion, candidates, page.renderSeed + index, "初版包装页候选", null);
+    const first = createPackagingCandidate(task, page, contentPages, approvedVersion, candidates, page.renderSeed + index, "初版包装页候选", null);
     candidates.push(first);
-    const second = createPackagingCandidate(page, contentPages, approvedVersion, candidates, page.renderSeed + index + 1, "候选偏向：加强信息层级与版式区分", null);
+    const second = createPackagingCandidate(task, page, contentPages, approvedVersion, candidates, page.renderSeed + index + 1, "候选偏向：加强信息层级与版式区分", null);
     candidates.push(second);
   });
 
@@ -1000,7 +1064,6 @@ function createFinalComposition(
   const rearPages = packagingPages
     .filter((page) => page.pageRole !== "cover" && page.pageRole !== "toc")
     .sort((a, b) => a.index - b.index);
-  const orderedSourcePages = [...frontPages, ...contentPages.slice().sort((a, b) => a.index - b.index), ...rearPages];
   const approvedPackagingCandidateMap = new Map(
     packagingCandidates
       .filter((candidate) => candidate.isApproved)
@@ -1010,6 +1073,22 @@ function createFinalComposition(
     Object.entries(approvedVersion.pageModelsByPageId ?? {}).map(([pageId, pageModel]) => [pageId, pageModel] as const),
   );
   const orderedContentPages = contentPages.slice().sort((a, b) => a.index - b.index);
+  const contentCompositionPages: FinalCompositionPage[] = orderedContentPages.map((page, index) => ({
+    id: createCompositionPageId(),
+    compositionId,
+    taskId,
+    sourcePageId: page.id,
+    sourceKind: "content-page" as const,
+    sourceVersionId: approvedVersion.id,
+    pageKind: page.pageKind,
+    pageRole: page.pageRole,
+    pageType: page.pageType,
+    pageBucket: "content" as const,
+    orderIndex: frontPages.length + index + 1,
+    sourcePageModel: contentPageModelMap.get(page.id),
+    previewHtml: approvedVersion.previewsByPageId[page.id] ?? "",
+    createdAt: now,
+  } satisfies FinalCompositionPage));
   const packagingFormalPageMap = new Map<string, PackagingPageFormal | undefined>();
   packagingPages.forEach((page) => {
     const candidate = approvedPackagingCandidateMap.get(page.id);
@@ -1033,9 +1112,11 @@ function createFinalComposition(
     };
 
     if (candidate.pageRole === "cover") {
-      const coverMeta = page.coverMeta ?? {
+      const coverMeta = candidate.generatedCoverContent ?? page.coverMeta ?? {
         title: page.pageType,
         subtitle: "",
+        summary: candidate.summary,
+        footerNote: "",
         issueLabel: "",
         heroLabel: "",
         brandLabel: "",
@@ -1046,7 +1127,7 @@ function createFinalComposition(
         ...common,
         title: coverMeta.title,
         subtitle: coverMeta.subtitle,
-        footerNote: `${coverMeta.issueLabel} · ${coverMeta.brandLabel}`.trim(),
+        footerNote: ("footerNote" in coverMeta ? coverMeta.footerNote : "") || `${coverMeta.issueLabel} · ${coverMeta.brandLabel}`.trim(),
         kicker: coverMeta.kicker,
         heroLabel: coverMeta.heroLabel,
         issueLabel: coverMeta.issueLabel,
@@ -1055,26 +1136,39 @@ function createFinalComposition(
       return;
     }
 
+    if (candidate.pageRole === "toc") {
+      const tocContent = generateTocContentFromComposition(page.pageType, contentCompositionPages);
+      packagingFormalPageMap.set(page.id, {
+        ...common,
+        title: tocContent.title,
+        subtitle: tocContent.subtitle,
+        footerNote: tocContent.footerNote,
+        tocEntries: tocContent.tocEntries,
+        guidanceNote: tocContent.guidanceNote,
+      });
+      return;
+    }
+
     packagingFormalPageMap.set(page.id, {
       ...common,
-      title: page.pageType,
-      subtitle: "目录组织与阅读导航",
-      footerNote: "目录页可在硬编辑阶段继续微调标题和顺序表达。",
-      tocEntries: orderedContentPages.map((contentPage, index) => `${index + 1}. ${contentPage.pageType}`),
-      guidanceNote: "目录页直接依据已确认内容结构生成，用于建立全刊阅读入口。",
+      title: candidate.generatedTocContent?.title ?? page.pageType,
+      subtitle: candidate.generatedTocContent?.subtitle ?? "目录组织与阅读导航",
+      footerNote: candidate.generatedTocContent?.footerNote ?? "目录页可在硬编辑阶段继续微调标题和顺序表达。",
+      tocEntries: candidate.generatedTocContent?.tocEntries ?? [],
+      guidanceNote: candidate.generatedTocContent?.guidanceNote ?? "目录页直接依据已确认内容结构生成，用于建立全刊阅读入口。",
     });
   });
 
-  const compositionPages = orderedSourcePages.map((page, index) => {
-    const approvedPackagingCandidate = page.pageKind === "packaging" ? approvedPackagingCandidateMap.get(page.id) : undefined;
-    const approvedPackagingPage = page.pageKind === "packaging" ? packagingFormalPageMap.get(page.id) : undefined;
+  const frontCompositionPages: FinalCompositionPage[] = frontPages.map((page, index) => {
+    const approvedPackagingCandidate = approvedPackagingCandidateMap.get(page.id);
+    const approvedPackagingPage = packagingFormalPageMap.get(page.id);
     return {
       id: createCompositionPageId(),
       compositionId,
       taskId,
       sourcePageId: page.id,
-      sourceKind: page.pageKind === "content" ? "content-page" : "packaging-page",
-      sourceVersionId: page.pageKind === "content" ? approvedVersion.id : approvedPackagingCandidate?.id ?? approvedVersion.id,
+      sourceKind: "packaging-page" as const,
+      sourceVersionId: approvedPackagingCandidate?.id ?? approvedVersion.id,
       sourcePackagingCandidateId: approvedPackagingCandidate?.id,
       sourcePackaging:
         approvedPackagingCandidate && (page.pageRole === "cover" || page.pageRole === "toc")
@@ -1093,18 +1187,44 @@ function createFinalComposition(
       pageKind: page.pageKind,
       pageRole: page.pageRole,
       pageType: page.pageType,
-      pageBucket: page.pageKind === "content" ? "content" : page.pageRole === "cover" || page.pageRole === "toc" ? "front" : "rear",
+      pageBucket: "front" as const,
       orderIndex: index + 1,
-      sourcePageModel: page.pageKind === "content" ? contentPageModelMap.get(page.id) : undefined,
+      sourcePageModel: undefined,
       previewHtml:
-        page.pageKind === "content"
-          ? approvedVersion.previewsByPageId[page.id] ?? ""
-          : approvedPackagingPage
-            ? renderPackagingFormalToHtml(page.pageRole, approvedPackagingPage)
-            : approvedPackagingCandidate?.previewHtml ?? "",
+        approvedPackagingPage
+          ? renderPackagingFormalToHtml(page.pageRole, approvedPackagingPage)
+          : approvedPackagingCandidate?.previewHtml ?? "",
       createdAt: now,
     } satisfies FinalCompositionPage;
   });
+
+  const rearCompositionPages: FinalCompositionPage[] = rearPages.map((page, index) => {
+    const approvedPackagingCandidate = approvedPackagingCandidateMap.get(page.id);
+    const approvedPackagingPage = packagingFormalPageMap.get(page.id);
+    return {
+      id: createCompositionPageId(),
+      compositionId,
+      taskId,
+      sourcePageId: page.id,
+      sourceKind: "packaging-page" as const,
+      sourceVersionId: approvedPackagingCandidate?.id ?? approvedVersion.id,
+      sourcePackagingCandidateId: approvedPackagingCandidate?.id,
+      sourcePackagingPageId: approvedPackagingPage?.id,
+      sourcePackagingPage: approvedPackagingPage,
+      pageKind: page.pageKind,
+      pageRole: page.pageRole,
+      pageType: page.pageType,
+      pageBucket: "rear" as const,
+      orderIndex: frontPages.length + contentCompositionPages.length + index + 1,
+      previewHtml: approvedPackagingPage
+        ? renderPackagingFormalToHtml(page.pageRole, approvedPackagingPage)
+        : approvedPackagingCandidate?.previewHtml ?? "",
+      createdAt: now,
+    } satisfies FinalCompositionPage;
+  });
+
+  const compositionPages = [...frontCompositionPages, ...contentCompositionPages, ...rearCompositionPages];
+  const orderedSourcePages = [...frontPages, ...orderedContentPages, ...rearPages];
 
   const frontCompositionPageIds = compositionPages.filter((page) => page.pageBucket === "front").map((page) => page.id);
   const contentCompositionPageIds = compositionPages.filter((page) => page.pageBucket === "content").map((page) => page.id);
@@ -1500,7 +1620,7 @@ export const useAppStore = create<AppState>()(
           const taskPackagingCandidates = state.packagingCandidates.filter((candidate) => candidate.taskId === taskId);
           const nextPackagingCandidates = taskPackagingCandidates.length
             ? taskPackagingCandidates
-            : createInitialPackagingCandidates(packagingPages, contentPages, approvedVersion);
+            : createInitialPackagingCandidates(task, packagingPages, contentPages, approvedVersion);
 
           const updatedVersions = appendPackagingPreviewsToVersions(taskVersions, packagingPages, contentPages);
 
@@ -1534,8 +1654,9 @@ export const useAppStore = create<AppState>()(
       },
       regeneratePackagingPage: (taskId, pageId) => {
         set((state) => {
+          const task = state.tasks.find((item) => item.id === taskId);
           const packagingPage = state.packagingPages.find((page) => page.id === pageId && page.taskId === taskId);
-          if (!packagingPage) {
+          if (!task || !packagingPage) {
             return state;
           }
 
@@ -1565,6 +1686,7 @@ export const useAppStore = create<AppState>()(
                 : packagingPage.coverMeta,
           });
           const nextCandidate = createPackagingCandidate(
+            task,
             updatedPage,
             contentPages,
             approvedVersion,

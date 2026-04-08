@@ -21,6 +21,26 @@ export interface PackagingCompositionSource {
   basedOnContentVersionId: string;
 }
 
+export interface GeneratedCoverContent {
+  title: string;
+  subtitle: string;
+  summary: string;
+  footerNote: string;
+  kicker?: string;
+  heroLabel?: string;
+  issueLabel?: string;
+  brandLabel?: string;
+}
+
+export interface GeneratedTocContent {
+  title: string;
+  subtitle: string;
+  summary: string;
+  footerNote: string;
+  tocEntries: string[];
+  guidanceNote?: string;
+}
+
 export type HardEditElementKind =
   | "hero-title"
   | "hero-summary"
@@ -183,6 +203,8 @@ export interface PackagingPageCandidate {
   derivedFromCandidateId: string | null;
   basedOnContentVersionId: string;
   previewHtml: string;
+  generatedCoverContent?: GeneratedCoverContent;
+  generatedTocContent?: GeneratedTocContent;
   isSelected: boolean;
   isApproved: boolean;
   createdAt: string;

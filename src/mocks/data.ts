@@ -181,6 +181,43 @@ function createId(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function clampText(value: string, limit: number, fallback = "") {
+  const normalized = value.replace(/\s+/g, " ").trim() || fallback;
+  return normalized.length > limit ? `${normalized.slice(0, limit).trim()}...` : normalized;
+}
+
+function buildPromptDrivenOverview(prompt: string, workType: WorkType) {
+  const normalizedTopic = prompt
+    .replace(/^(请|帮我|我想|希望|准备|需要)/, "")
+    .replace(/^(生成|做|制作|产出)/, "")
+    .replace(/^(一期|一份|一个)/, "")
+    .trim();
+  const topic = clampText(normalizedTopic || prompt, 26, workType === "magazine" ? "本期主题" : "当前主题");
+
+  return {
+    pageType: workType === "magazine" ? "趋势综述" : "项目综述",
+    outlineText: `围绕 ${topic} 建立总览页，先收束主题判断，再给出后续内容页的阅读入口。`,
+    styleText: workType === "magazine" ? "像刊首综述页一样先建立总体判断，再进入细节页面" : "像汇报开场页一样先完成问题定义和阅读校准",
+    userConstraints: "优先组织主题进入、判断层次和阅读顺序，不在这一页过早摊开全部细节。",
+  };
+}
+
+function buildPromptDrivenSummary(prompt: string, workType: WorkType) {
+  const normalizedTopic = prompt
+    .replace(/^(请|帮我|我想|希望|准备|需要)/, "")
+    .replace(/^(生成|做|制作|产出)/, "")
+    .replace(/^(一期|一份|一个)/, "")
+    .trim();
+  const topic = clampText(normalizedTopic || prompt, 26, workType === "magazine" ? "本期主题" : "当前主题");
+
+  return {
+    pageType: workType === "magazine" ? "结语页" : "总结页",
+    outlineText: `围绕 ${topic} 做最终收束，沉淀可带走判断、下一步建议与边界提醒。`,
+    styleText: workType === "magazine" ? "像刊末结语页一样克制收束，不重新展开综述" : "像汇报结尾页一样明确结论、建议与风险边界",
+    userConstraints: "收束页只保留少量结论与行动建议，不重新平铺整期内容。",
+  };
+}
+
 const variantLeadTexts = [
   [
     "本版先把最重要的判断与摘要放到最上方，让读者在进入正文前先完成一轮快速理解。",
@@ -1366,9 +1403,11 @@ export function createDeferredPackagingPages(taskId: string, startIndex: number)
   }));
 }
 
-function createMockPages(taskId: string, mockPageCount: number): Page[] {
+function createMockPages(taskId: string, mockPageCount: number, prompt: string, workType: WorkType): Page[] {
   // Directory / TOC is intentionally excluded from the initial mock page structure.
   // In the real workflow it should be derived after structure confirmation, not hardcoded up front.
+  const dynamicOverview = buildPromptDrivenOverview(prompt, workType);
+  const dynamicSummary = buildPromptDrivenSummary(prompt, workType);
   return MOCK_INITIAL_PAGE_BLUEPRINTS.slice(0, mockPageCount).map((blueprint, index) => ({
     id: createId("page"),
     taskId,
@@ -1376,12 +1415,12 @@ function createMockPages(taskId: string, mockPageCount: number): Page[] {
     renderSeed: 0,
     pageKind: blueprint.pageKind,
     pageRole: blueprint.pageRole,
-    pageType: blueprint.pageType,
-    outlineText: blueprint.outlineText,
+    pageType: index === 0 ? dynamicOverview.pageType : index === 3 ? dynamicSummary.pageType : blueprint.pageType,
+    outlineText: index === 0 ? dynamicOverview.outlineText : index === 3 ? dynamicSummary.outlineText : blueprint.outlineText,
     sourceMode: blueprint.sourceMode,
     expressionMode: blueprint.expressionMode,
-    styleText: blueprint.styleText,
-    userConstraints: blueprint.userConstraints,
+    styleText: index === 0 ? dynamicOverview.styleText : index === 3 ? dynamicSummary.styleText : blueprint.styleText,
+    userConstraints: index === 0 ? dynamicOverview.userConstraints : index === 3 ? dynamicSummary.userConstraints : blueprint.userConstraints,
     isConfirmed: false,
     isSaved: index === 0,
     userProvidedContentBlocks: blueprint.userProvidedContentBlocks,
@@ -1398,7 +1437,7 @@ export function createSeedTask(
   const taskId = createId("task");
   const now = new Date().toISOString();
   const mockPageCount = Math.max(1, Math.min(options.mockPageCount ?? DEFAULT_MOCK_PAGE_COUNT, MOCK_INITIAL_PAGE_BLUEPRINTS.length));
-  const pages = createMockPages(taskId, mockPageCount);
+  const pages = createMockPages(taskId, mockPageCount, prompt, workType);
 
   const task: Task = {
     id: taskId,

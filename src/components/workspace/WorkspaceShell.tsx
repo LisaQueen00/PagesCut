@@ -4,6 +4,7 @@ import { OutlinePageCard } from "@/components/workspace/OutlinePageCard";
 import { StageOneDrawer } from "@/components/workspace/StageOneDrawer";
 import { StageTwoDrawer } from "@/components/workspace/StageTwoDrawer";
 import { WorkspaceStageRail } from "@/components/workspace/WorkspaceStageRail";
+import { ResponsiveHtmlPreview } from "@/lib/htmlPreview";
 import { mergeCompositionPageWithEditedResult } from "@/lib/finalComposition";
 import { formatTime } from "@/lib/format";
 import { getPageDisplayLabel, sortPagesForFinalOrder } from "@/lib/pageDisplay";
@@ -20,14 +21,6 @@ const stylePool = [
   "冷静科技感，强调标题层级",
   "高端刊物风，边界轻、留白大",
 ];
-
-const A4_RATIO = 210 / 297;
-const SLIDE_RATIO = 16 / 9;
-const PREVIEW_BASE_WIDTH = 920;
-
-function getPreviewRatio(format: "pdf" | "pptx") {
-  return format === "pptx" ? SLIDE_RATIO : A4_RATIO;
-}
 
 function getGroupedPages<T extends Page | FinalCompositionPage>(pages: T[]) {
   const orderedPages = sortPagesForFinalOrder(pages);
@@ -630,12 +623,7 @@ function HardEditPagePreview({
   const previewContentPageModel = editedResult?.editedPageModel ?? (!editedResult ? page.sourcePageModel : undefined);
   const previewPackagingPage = editedResult?.editedPackagingPage ?? (!editedResult ? page.sourcePackagingPage : undefined);
   const prefersPageModel = page.pageKind === "content" && Boolean(previewContentPageModel);
-  const ratio = getPreviewRatio(task.preferredExportFormat);
   const previewMaxWidth = task.preferredExportFormat === "pptx" ? 820 : 760;
-  const frameWidth = previewMaxWidth;
-  const frameHeight = Math.round(frameWidth / ratio);
-  const scale = frameWidth / PREVIEW_BASE_WIDTH;
-  const htmlBaseHeight = Math.round(PREVIEW_BASE_WIDTH / ratio);
 
   const previewSourceLabel = editedResult
     ? "当前预览使用编辑后结果"
@@ -679,15 +667,8 @@ function HardEditPagePreview({
                 <PackagingPagePreview pageRole={page.pageRole} formal={previewPackagingPage} maxWidth={previewMaxWidth} />
               ) : (
                 <div className="w-full max-w-[820px] overflow-hidden rounded-[20px] border border-line/70 bg-[#f4f7fb] p-4">
-                  <div
-                    className="mx-auto overflow-hidden rounded-[18px] bg-white shadow-sm"
-                    style={{ width: frameWidth, maxWidth: "100%", height: frameHeight }}
-                  >
-                    <div
-                      className="origin-top-left"
-                      style={{ width: PREVIEW_BASE_WIDTH, height: htmlBaseHeight, transform: `scale(${scale})` }}
-                      dangerouslySetInnerHTML={{ __html: effectivePage.previewHtml }}
-                    />
+                  <div className="mx-auto overflow-hidden rounded-[18px] bg-white shadow-sm">
+                    <ResponsiveHtmlPreview html={effectivePage.previewHtml} maxWidth={previewMaxWidth} />
                   </div>
                 </div>
               )}

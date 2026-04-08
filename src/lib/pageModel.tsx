@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { Page, UserProvidedContentBlock } from "@/types/domain";
 import { getContentUnitPolicy, getTextUnitPolicy, resolveTextUnitAssemblyFromTextSources, resolveUnitAssemblyFromPolicy } from "@/lib/contentUnitPolicy";
+import { generateOverviewContractInput, generateSummaryContractInput } from "@/lib/realContent";
+import type { Page, UserProvidedContentBlock } from "@/types/domain";
 import type {
   GeneratedCaseContractInput,
   GeneratedOverviewContractInput,
@@ -141,6 +142,44 @@ function buildSyntheticTextSources(page: Page, fallbacks: string[]) {
       id: `${page.id}-synthetic-text-${index + 1}`,
       label: clampText(value, 26, `text source ${index + 1}`),
     }));
+}
+
+function buildOverviewTextSources(page: Page) {
+  const explicitTexts = page.userProvidedContentBlocks
+    .filter((block): block is Extract<UserProvidedContentBlock, { type: "text" }> => block.type === "text")
+    .map((block, index) => ({
+      id: block.id,
+      label: clampText(block.text, 26, `text source ${index + 1}`),
+    }));
+
+  const fallbackTexts = buildSyntheticTextSources(page, [page.outlineText, page.styleText, page.userConstraints]);
+  const combined = [...explicitTexts];
+  fallbackTexts.forEach((item) => {
+    if (!combined.some((existing) => existing.label === item.label)) {
+      combined.push(item);
+    }
+  });
+
+  return combined.slice(0, 3);
+}
+
+function buildSummaryTextSources(page: Page) {
+  const explicitTexts = page.userProvidedContentBlocks
+    .filter((block): block is Extract<UserProvidedContentBlock, { type: "text" }> => block.type === "text")
+    .map((block, index) => ({
+      id: block.id,
+      label: clampText(block.text, 26, `text source ${index + 1}`),
+    }));
+
+  const fallbackTexts = buildSyntheticTextSources(page, [page.outlineText, page.userConstraints, page.styleText]);
+  const combined = [...explicitTexts];
+  fallbackTexts.forEach((item) => {
+    if (!combined.some((existing) => existing.label === item.label)) {
+      combined.push(item);
+    }
+  });
+
+  return combined.slice(0, 3);
 }
 
 // PageIntent is the bridge between Stage 1 page definition and later layout generation.
@@ -335,12 +374,8 @@ export function createPageContentPlan(page: Page, pageIntent: PageIntent): PageC
   if (pageIntent.pageType === "overview") {
     const requestedTextUnits = 3;
     const textPolicy = getTextUnitPolicy();
-    const syntheticTextSources = buildSyntheticTextSources(page, [
-      page.outlineText,
-      page.styleText,
-      page.userConstraints,
-    ]);
-    const textAssembly = resolveTextUnitAssemblyFromTextSources(syntheticTextSources, requestedTextUnits);
+    const overviewTextSources = buildOverviewTextSources(page);
+    const textAssembly = resolveTextUnitAssemblyFromTextSources(overviewTextSources, requestedTextUnits);
     return {
       pageId: page.id,
       pageType: pageIntent.pageType,
@@ -366,12 +401,8 @@ export function createPageContentPlan(page: Page, pageIntent: PageIntent): PageC
   if (pageIntent.pageType === "summary") {
     const requestedTextUnits = 3;
     const textPolicy = getTextUnitPolicy();
-    const syntheticTextSources = buildSyntheticTextSources(page, [
-      page.outlineText,
-      page.userConstraints,
-      page.styleText,
-    ]);
-    const textAssembly = resolveTextUnitAssemblyFromTextSources(syntheticTextSources, requestedTextUnits);
+    const summaryTextSources = buildSummaryTextSources(page);
+    const textAssembly = resolveTextUnitAssemblyFromTextSources(summaryTextSources, requestedTextUnits);
     return {
       pageId: page.id,
       pageType: pageIntent.pageType,
@@ -419,99 +450,13 @@ export function createGeneratedOverviewContract(page: Page, versionLabel: string
   if (resolveSupportedPageType(page) !== "overview") {
     return null;
   }
-
-  const supportPoints = splitParagraphs(page.outlineText);
-  const highlights = [
-    `${versionLabel}：本期重点已收束为更清晰的总览判断。`,
-    summarize(page.styleText, "版式倾向：信息密度高但阅读路径稳定。"),
-    summarize(page.userConstraints, "本页仍控制在少量核心观点内。"),
-    "本页优先帮助读者在进入后续内容前完成主题判断。",
-  ];
-  const openingNote = "先用一页完成主题进入，再把读者送到后续案例、专题和数据支撑页。";
-  const signalMetrics: PageModelMetricItem[] = [
-    {
-      id: "overview-metric-1",
-      label: "核心判断",
-      value: "3 条",
-      detail: "本页先给读者一个可以快速带走的整体结论框架。",
-    },
-    {
-      id: "overview-metric-2",
-      label: "阅读位置",
-      value: "总览入口",
-      detail: "先建立主题判断，再进入案例、专题和数据支撑页。",
-    },
-    {
-      id: "overview-metric-3",
-      label: "阅读节奏",
-      value: "先摘要后解释",
-      detail: "先看到总体判断和信号，再进入正文解释与延展观点。",
-    },
-  ];
-  const signalItems = ensureItems(
-    highlights.map((item, index) => ({
-      heading: `判断 ${index + 1}`,
-      detail: item,
-    })),
-    [
-      { heading: "主题判断", detail: "读者需要先带走一个总体方向，再决定是否进入更细的案例或数据。" },
-      { heading: "结构任务", detail: "本页优先组织判断层次，而不是堆叠尽可能多的素材点。" },
-    ],
-    4,
-  );
-  const viewpointCards = ensureItems([
-    "模型竞争正在从能力堆叠转向可落地产品效率竞争。",
-    "生成式产品的价值越来越体现在组织工作流里的复用能力。",
-    "读者更需要先抓住结构化判断，再决定是否深入细节。",
-    "页面设计应优先服务主题进入，而不是先把数据细节堆到前台。",
-  ], [
-    "总览页要先给出判断，而不是先给出细节。",
-    "观点块需要承接主题进入后的延展阅读。",
-  ], 4);
-  const supportParagraphs =
-    supportPoints.length > 1
-      ? supportPoints
-      : [
-          supportPoints[0] || "聚焦本月重点变化与整体判断。",
-          "这一页承担的是读者进入整期内容前的主题校准作用，因此重点不是铺满素材，而是组织判断层次。",
-          "随后进入专题页或数据页时，读者应已经知道本期最值得关注的变化方向。",
-          ...(pageIntent?.textDensity === "high" ? ["这一页应保留更完整的解释层，而不是只给出单行结论。"] : []),
-        ];
   const effectiveIntent = pageIntent ?? createPageIntent(page);
   const effectivePlan = _contentPlan ?? (effectiveIntent ? createPageContentPlan(page, effectiveIntent) : null);
-  const textUnit = effectivePlan?.units.find((unit) => unit.unitType === "text");
-  const textAssembly = textUnit?.assembly;
-  const textUnits = Array.from({ length: textUnit?.resolvedCount ?? 0 }, (_, index) => ({
-    label: `判断文本单元 ${index + 1}`,
-    outcome: textAssembly?.resolvedUnits?.[index]?.outcome,
-    textSlotLabel: `text slot ${index + 1}`,
-    slotBindings: textAssembly?.resolvedUnits?.[index]?.slots ?? [],
-  }));
+  if (!effectiveIntent) {
+    return null;
+  }
 
-  return {
-    sourceKind: "generated",
-    pageType: "overview",
-    pageId: page.id,
-    versionLabel,
-    title: page.pageType,
-    outline: page.outlineText,
-    tone: page.styleText || "结构清晰、信息密度高",
-    openingNote,
-    highlights,
-    signalItems,
-    signalMetrics,
-    viewpointCards,
-    supportPoints: supportParagraphs,
-    textUnits,
-    textUnitStatus: {
-      requestedCount: textUnit?.requestedCount ?? 0,
-      resolvedCount: textUnit?.resolvedCount ?? 0,
-      filledCount: textUnit?.filledCount ?? 0,
-      partialCount: textAssembly?.partialCount ?? 0,
-      unfilledCount: textAssembly?.unfilledCount ?? 0,
-      fillRule: textAssembly?.fillRule ?? textUnit?.fillRule ?? "all-required-slots",
-    },
-  };
+  return generateOverviewContractInput(page, versionLabel, effectiveIntent, effectivePlan);
 }
 
 function getTextBlocks(blocks: UserProvidedContentBlock[]) {
@@ -747,90 +692,13 @@ export function createGeneratedSummaryContract(page: Page, versionLabel: string,
   if (resolveSupportedPageType(page) !== "summary") {
     return null;
   }
-
-  const paragraphs = splitParagraphs(page.outlineText);
-  const finalJudgment =
-    paragraphs[0] || "本页的职责是把整期内容收束成读者可以带走的最终判断，而不是重新展开完整综述。";
-  const conclusionPoints = ensureItems(
-    [
-      { heading: "结论 1", detail: "本期最值得带走的不是单个事件，而是模型落地正进入更稳定的结构化阶段。" },
-      { heading: "结论 2", detail: "读者应优先记住变化方向、行动重点和风险边界，而不是回看全部细节。" },
-      { heading: "结论 3", detail: "收束页的作用是帮助读者结束阅读，并明确接下来该关注什么。" },
-    ],
-    [{ heading: "最终判断", detail: finalJudgment }],
-    3,
-  );
-  const recommendations = ensureItems(
-    [
-      "把本期结论转成下一轮观察清单，而不是停留在泛化判断层。",
-      "优先跟进最可能形成长期价值的应用落地与流程复用方向。",
-      "在下一阶段阅读或行动中，只保留最关键的两个到三个判断锚点。",
-    ],
-    ["后续建议应直接承接最终判断，而不是重新扩散主题。"],
-    3,
-  );
-  const cautions = ensureItems(
-    [
-      summarize(page.userConstraints, "风险提醒需要克制，不把收束页重新做成问题清单。"),
-      "不要把单月波动误读为长期趋势，也不要把局部案例误当成普遍结论。",
-    ],
-    ["收束页需要保留边界感，避免结论过满。"],
-    2,
-  );
   const effectiveIntent = pageIntent ?? createPageIntent(page);
   const effectivePlan = _contentPlan ?? (effectiveIntent ? createPageContentPlan(page, effectiveIntent) : null);
-  const textUnit = effectivePlan?.units.find((unit) => unit.unitType === "text");
-  const textAssembly = textUnit?.assembly;
-  const textUnits = Array.from({ length: textUnit?.resolvedCount ?? 0 }, (_, index) => ({
-    label: `收束文本单元 ${index + 1}`,
-    outcome: textAssembly?.resolvedUnits?.[index]?.outcome,
-    textSlotLabel: `text slot ${index + 1}`,
-    slotBindings: textAssembly?.resolvedUnits?.[index]?.slots ?? [],
-  }));
+  if (!effectiveIntent) {
+    return null;
+  }
 
-  return {
-    sourceKind: "generated",
-    pageType: "summary",
-    pageId: page.id,
-    versionLabel,
-    title: page.pageType,
-    finalJudgment,
-    conclusionPoints,
-    recommendations,
-    cautions,
-    closingNote:
-      paragraphs[1] ||
-      "结语页更像阅读收束页：它帮助读者把本期内容折叠成可带走的判断、行动与注意事项，而不是重新进入展开讨论。",
-    evidenceMetrics: [
-      {
-        id: "summary-metric-1",
-        label: "最终判断",
-        value: `${conclusionPoints.length} 条`,
-        detail: `收束页优先保留少量可带走结论，而不是继续扩内容。${pageIntent?.textDensity === "high" ? " 当前页允许保留稍高文字密度。" : ""}`,
-      },
-      {
-        id: "summary-metric-2",
-        label: "行动建议",
-        value: `${recommendations.length} 项`,
-        detail: "建议区应直接服务读者下一步判断或行动。",
-      },
-      {
-        id: "summary-metric-3",
-        label: "风险提醒",
-        value: `${cautions.length} 条`,
-        detail: "收束页保留边界提醒，但不回到完整风险展开页。",
-      },
-    ],
-    textUnits,
-    textUnitStatus: {
-      requestedCount: textUnit?.requestedCount ?? 0,
-      resolvedCount: textUnit?.resolvedCount ?? 0,
-      filledCount: textUnit?.filledCount ?? 0,
-      partialCount: textAssembly?.partialCount ?? 0,
-      unfilledCount: textAssembly?.unfilledCount ?? 0,
-      fillRule: textAssembly?.fillRule ?? textUnit?.fillRule ?? "all-required-slots",
-    },
-  };
+  return generateSummaryContractInput(page, versionLabel, effectiveIntent, effectivePlan);
 }
 
 export function fillContractToPageModel(contract: LayoutContract, variant = 0): PageModel {
