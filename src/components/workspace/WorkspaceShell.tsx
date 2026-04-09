@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { CandidatePreview } from "@/components/workspace/CandidatePreview";
+import { hydrateHardEditEditableElementAlignment } from "@/lib/hardEditAlignment";
 import { OutlinePageCard } from "@/components/workspace/OutlinePageCard";
 import { StageOneDrawer } from "@/components/workspace/StageOneDrawer";
 import { StageTwoDrawer } from "@/components/workspace/StageTwoDrawer";
@@ -746,7 +747,9 @@ function HardEditWorkspace({
 
   function updateEditableElement(elementId: string, value: string) {
     updateHardEditDraft(currentDraft.id, {
-      editableElements: currentDraft.editableElements.map((element) => (element.id === elementId ? { ...element, value } : element)),
+      editableElements: currentDraft.editableElements.map((element) =>
+        element.id === elementId ? hydrateHardEditEditableElementAlignment({ ...element, value }) : element,
+      ),
     });
   }
 
@@ -820,6 +823,42 @@ function HardEditWorkspace({
                     <span className="rounded-full bg-white px-2.5 py-1 text-[11px] text-muted">{element.kind}</span>
                   </div>
                   <p className="mt-2 text-[11px] leading-5 text-muted">{element.sourcePath}</p>
+                  {element.sourceReferences?.length ? (
+                    <div className="mt-3 rounded-2xl border border-line/60 bg-white/80 px-3 py-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted">Formal Source</p>
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] ${
+                            element.sourceAlignmentStatus === "aligned"
+                              ? "bg-emerald-50 text-emerald-700"
+                              : element.sourceAlignmentStatus === "edited"
+                                ? "bg-amber-50 text-amber-700"
+                                : "bg-[#eef2f7] text-muted"
+                          }`}
+                        >
+                          {element.sourceAlignmentStatus === "aligned"
+                            ? "aligned"
+                            : element.sourceAlignmentStatus === "edited"
+                              ? "edited"
+                              : "unknown"}
+                        </span>
+                      </div>
+                      <div className="mt-2 space-y-2">
+                        {element.sourceReferences.map((reference) => (
+                          <div key={`${element.id}-${reference.kind}-${reference.id}`} className="rounded-xl border border-line/50 bg-[#f8fafc] px-3 py-2">
+                            <div className="flex items-center gap-2">
+                              <span className="rounded-full bg-white px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-muted">
+                                {reference.kind}
+                              </span>
+                              <p className="text-xs font-medium text-ink">{reference.label}</p>
+                            </div>
+                            <p className="mt-1 text-[11px] leading-5 text-muted">{reference.detail}</p>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="mt-2 text-[11px] leading-5 text-muted">{element.sourceAlignmentNote}</p>
+                    </div>
+                  ) : null}
                   {element.multiline ? (
                     <textarea
                       value={element.value}

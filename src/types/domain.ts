@@ -57,6 +57,16 @@ export type HardEditElementKind =
   | "packaging-guidance"
   | "packaging-footer";
 
+export type HardEditFormalSourceKind = "TextSourceFragment" | "ImageSourceAsset" | "ChartBriefSource";
+export type HardEditSourceAlignmentStatus = "aligned" | "edited" | "unknown";
+
+export interface HardEditSourceReference {
+  id: string;
+  kind: HardEditFormalSourceKind;
+  label: string;
+  detail: string;
+}
+
 export interface HardEditEditableElement {
   id: string;
   label: string;
@@ -64,6 +74,10 @@ export interface HardEditEditableElement {
   sourcePath: string;
   value: string;
   multiline: boolean;
+  sourceReferences?: HardEditSourceReference[];
+  sourceAlignmentSnapshot?: string;
+  sourceAlignmentStatus?: HardEditSourceAlignmentStatus;
+  sourceAlignmentNote?: string;
 }
 
 export interface PackagingPageFormal {

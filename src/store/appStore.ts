@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { createPageSourceSet } from "@/lib/pageSources";
+import { createSourceAlignmentSnapshot, hydrateHardEditEditableElementAlignment } from "@/lib/hardEditAlignment";
 import { renderPackagingFormalToHtml } from "@/lib/packagingFormal";
 import { renderPageModelToHtml } from "@/lib/pageModel";
 import { generateCoverContent, generateTocContent, generateTocContentFromComposition } from "@/lib/realContent";
@@ -24,6 +26,7 @@ import type {
   FinalCompositionPage,
   HardEditEditableElement,
   HardEditPageDraft,
+  HardEditSourceReference,
   PackagingPageCandidate,
   PackagingPageFormal,
   Page,
@@ -297,10 +300,9 @@ function normalizeFinalCompositionPage(page: FinalCompositionPage): FinalComposi
 }
 
 function normalizeHardEditDraft(draft: HardEditPageDraft): HardEditPageDraft {
-  const editableElements =
-    Array.isArray(draft.editableElements) && draft.editableElements.length
-      ? draft.editableElements
-      : [
+  const editableElements = Array.isArray(draft.editableElements) && draft.editableElements.length
+    ? draft.editableElements.map((element) => hydrateHardEditEditableElementAlignment(element))
+    : [
           createEditableElement("hero-title", "标题", "hero-title", "legacy:title", draft.title ?? "", false),
           createEditableElement("hero-summary", "副标题 / 摘要", "hero-summary", "legacy:subtitle", draft.subtitle ?? "", true),
           createEditableElement("legacy-body", "正文", "rich-text", "legacy:body", draft.bodyText ?? "", true),
@@ -356,7 +358,7 @@ function normalizeEditedCompositionPageResult(result: EditedCompositionPageResul
       result.sourceObjectKind === "legacy-source-page"
         ? result.sourceObjectKind
         : "legacy-source-page",
-    editableElements: Array.isArray(result.editableElements) ? result.editableElements : [],
+    editableElements: Array.isArray(result.editableElements) ? result.editableElements.map((element) => hydrateHardEditEditableElementAlignment(element)) : [],
     editedPageModel: result.editedPageModel,
     editedPackagingPage: result.editedPackagingPage,
     previewHtml: typeof result.previewHtml === "string" ? result.previewHtml : "",
@@ -621,6 +623,88 @@ function splitEditableLines(value: string) {
     .filter(Boolean);
 }
 
+function buildHardEditSourceReferences(compositionPage: FinalCompositionPage, sourcePage: Page | undefined) {
+  if (!compositionPage.sourcePageModel || !sourcePage) {
+    return {
+      text: [] as HardEditSourceReference[],
+      image: [] as HardEditSourceReference[],
+      chart: [] as HardEditSourceReference[],
+    };
+  }
+
+  const pageSourceSet = createPageSourceSet(sourcePage);
+  const slotBindings = compositionPage.sourcePageModel.regions
+    .flatMap((region) => region.blocks)
+    .filter((block): block is Extract<PageModel["regions"][number]["blocks"][number], { type: "content-slots" }> => block.type === "content-slots")
+    .flatMap((block) => block.items)
+    .flatMap((item) => item.slotBindings ?? []);
+
+  const references: HardEditSourceReference[] = slotBindings.flatMap((binding): HardEditSourceReference[] => {
+    const source = binding.source;
+    if (!source) {
+      return [];
+    }
+
+    if (source.sourceKind === "image-source") {
+      const imageAsset = pageSourceSet.imageAssets.find((item) => item.id === source.sourceId);
+      return imageAsset
+        ? [
+            {
+              id: imageAsset.id,
+              kind: "ImageSourceAsset" as const,
+              label: imageAsset.label,
+              detail: imageAsset.caption || imageAsset.altText || "image source",
+            },
+          ]
+        : [];
+    }
+
+    if (source.sourceKind === "chart-source") {
+      const chartBrief = pageSourceSet.chartBriefs.find((item) => item.id === source.sourceId);
+      return chartBrief
+        ? [
+            {
+              id: chartBrief.id,
+              kind: "ChartBriefSource" as const,
+              label: chartBrief.label,
+              detail: chartBrief.chartTypeHint ? `${chartBrief.chartTypeHint} · ${chartBrief.description}` : chartBrief.description,
+            },
+          ]
+        : [];
+    }
+
+    if (source.sourceKind === "text-source" || source.sourceKind === "explanation-source") {
+      const textFragment = pageSourceSet.textFragments.find((item) => item.id === source.sourceId || item.sourceBlockId === source.sourceId);
+      return textFragment
+        ? [
+            {
+              id: textFragment.id,
+              kind: "TextSourceFragment" as const,
+              label: textFragment.label,
+              detail:
+                textFragment.origin === "synthetic"
+                  ? `synthetic · ${textFragment.sourceField ?? "pageDefinition"}`
+                  : `user-block · ${textFragment.text}`,
+            },
+          ]
+        : [];
+    }
+
+    return [];
+  });
+
+  const dedupe = (kind: HardEditSourceReference["kind"]): HardEditSourceReference[] =>
+    Array.from(
+      new Map<string, HardEditSourceReference>(references.filter((item) => item.kind === kind).map((item) => [item.id, item] as const)).values(),
+    );
+
+  return {
+    text: dedupe("TextSourceFragment"),
+    image: dedupe("ImageSourceAsset"),
+    chart: dedupe("ChartBriefSource"),
+  };
+}
+
 function createEditableElement(
   id: string,
   label: string,
@@ -628,15 +712,18 @@ function createEditableElement(
   sourcePath: string,
   value: string,
   multiline: boolean,
+  sourceReferences?: HardEditSourceReference[],
 ): HardEditEditableElement {
-  return {
+  return hydrateHardEditEditableElementAlignment({
     id,
     label,
     kind,
     sourcePath,
     value,
     multiline,
-  };
+    sourceReferences,
+    sourceAlignmentSnapshot: createSourceAlignmentSnapshot(value, sourceReferences),
+  });
 }
 
 function getElementValue(elements: HardEditEditableElement[], id: string, fallback = "") {
@@ -684,22 +771,23 @@ function createContentEditableElements(compositionPage: FinalCompositionPage, so
   }
 
   const elements: HardEditEditableElement[] = [];
+  const sourceReferences = buildHardEditSourceReferences(compositionPage, sourcePage);
   sourcePageModel.regions.forEach((region) => {
     region.blocks.forEach((block) => {
       if (block.type === "hero") {
         elements.push(createEditableElement("hero-title", "标题", "hero-title", `block:${block.id}:title`, block.title, false));
-        elements.push(createEditableElement("hero-summary", "副标题 / 摘要", "hero-summary", `block:${block.id}:summary`, block.summary, true));
+        elements.push(createEditableElement("hero-summary", "副标题 / 摘要", "hero-summary", `block:${block.id}:summary`, block.summary, true, sourceReferences.text));
       } else if (block.type === "rich-text") {
-        elements.push(createEditableElement(`rich-text:${block.id}`, block.title || "正文", "rich-text", `block:${block.id}:paragraphs`, block.paragraphs.join("\n\n"), true));
+        elements.push(createEditableElement(`rich-text:${block.id}`, block.title || "正文", "rich-text", `block:${block.id}:paragraphs`, block.paragraphs.join("\n\n"), true, sourceReferences.text));
       } else if (block.type === "callout") {
-        elements.push(createEditableElement(`callout:${block.id}`, block.title || "说明块", "callout-body", `block:${block.id}:body`, block.body, true));
+        elements.push(createEditableElement(`callout:${block.id}`, block.title || "说明块", "callout-body", `block:${block.id}:body`, block.body, true, sourceReferences.text));
       } else if (block.type === "bullet-list") {
-        elements.push(createEditableElement(`bullet-list:${block.id}`, block.title || "列表", "bullet-list", `block:${block.id}:items`, block.items.join("\n"), true));
+        elements.push(createEditableElement(`bullet-list:${block.id}`, block.title || "列表", "bullet-list", `block:${block.id}:items`, block.items.join("\n"), true, sourceReferences.text));
       } else if (block.type === "visual") {
-        elements.push(createEditableElement("visual-caption", block.title || "视觉说明", "visual-caption", `block:${block.id}:caption`, block.caption, true));
+        elements.push(createEditableElement("visual-caption", block.title || "视觉说明", "visual-caption", `block:${block.id}:caption`, block.caption, true, sourceReferences.image));
         elements.push(createEditableElement("visual-kicker", "视觉前导", "visual-kicker", `block:${block.id}:kicker`, block.kicker, false));
       } else if (block.type === "chart") {
-        elements.push(createEditableElement("chart-title", block.title || "图表标题", "chart-title", `block:${block.id}:title`, block.title, false));
+        elements.push(createEditableElement("chart-title", block.title || "图表标题", "chart-title", `block:${block.id}:title`, block.title, false, sourceReferences.chart));
       }
     });
   });
