@@ -12,6 +12,7 @@ import { getPageDisplayLabel, sortPagesForFinalOrder } from "@/lib/pageDisplay";
 import { getCompositionPageResultSourceKind } from "@/lib/workflowGuards";
 import { PackagingPagePreview } from "@/lib/packagingFormal";
 import { PageModelPreview } from "@/lib/pageModel";
+import { getCompositionSourceAlignmentInsight, getCompositionSourceAlignmentSummary, getPagesBySourceAlignmentStatus } from "@/lib/sourceAlignmentSummary";
 import { useAppStore } from "@/store/appStore";
 import type { EditedCompositionPageResult, FinalComposition, FinalCompositionPage, HardEditPageDraft, Page, PageVersion, Task } from "@/types/domain";
 
@@ -823,10 +824,23 @@ function HardEditWorkspace({
                     <span className="rounded-full bg-white px-2.5 py-1 text-[11px] text-muted">{element.kind}</span>
                   </div>
                   <p className="mt-2 text-[11px] leading-5 text-muted">{element.sourcePath}</p>
+                  {element.multiline ? (
+                    <textarea
+                      value={element.value}
+                      onChange={(event) => updateEditableElement(element.id, event.target.value)}
+                      className="mt-3 min-h-[180px] w-full resize-y rounded-2xl border border-line/70 bg-white px-4 py-3 text-sm leading-7 text-ink outline-none transition focus:border-ink/20"
+                    />
+                  ) : (
+                    <input
+                      value={element.value}
+                      onChange={(event) => updateEditableElement(element.id, event.target.value)}
+                      className="mt-3 w-full rounded-2xl border border-line/70 bg-white px-4 py-3 text-sm text-ink outline-none transition focus:border-ink/20"
+                    />
+                  )}
                   {element.sourceReferences?.length ? (
-                    <div className="mt-3 rounded-2xl border border-line/60 bg-white/80 px-3 py-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted">Formal Source</p>
+                    <details className="mt-3 rounded-2xl border border-line/60 bg-white/80 px-3 py-3">
+                      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted">
+                        <span>Formal Source · {element.sourceReferences.length}</span>
                         <span
                           className={`rounded-full px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] ${
                             element.sourceAlignmentStatus === "aligned"
@@ -842,36 +856,23 @@ function HardEditWorkspace({
                               ? "edited"
                               : "unknown"}
                         </span>
-                      </div>
+                      </summary>
                       <div className="mt-2 space-y-2">
                         {element.sourceReferences.map((reference) => (
                           <div key={`${element.id}-${reference.kind}-${reference.id}`} className="rounded-xl border border-line/50 bg-[#f8fafc] px-3 py-2">
-                            <div className="flex items-center gap-2">
-                              <span className="rounded-full bg-white px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-muted">
+                            <div className="space-y-2">
+                              <span className="inline-flex max-w-full rounded-full bg-white px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-muted">
                                 {reference.kind}
                               </span>
-                              <p className="text-xs font-medium text-ink">{reference.label}</p>
+                              <p className="break-words text-xs font-medium leading-5 text-ink">{reference.label}</p>
                             </div>
-                            <p className="mt-1 text-[11px] leading-5 text-muted">{reference.detail}</p>
+                            <p className="mt-2 break-words text-[11px] leading-5 text-muted">{reference.detail}</p>
                           </div>
                         ))}
                       </div>
                       <p className="mt-2 text-[11px] leading-5 text-muted">{element.sourceAlignmentNote}</p>
-                    </div>
+                    </details>
                   ) : null}
-                  {element.multiline ? (
-                    <textarea
-                      value={element.value}
-                      onChange={(event) => updateEditableElement(element.id, event.target.value)}
-                      className="mt-3 min-h-[112px] w-full resize-none rounded-2xl border border-line/70 bg-white px-4 py-3 text-sm leading-7 text-ink outline-none transition focus:border-ink/20"
-                    />
-                  ) : (
-                    <input
-                      value={element.value}
-                      onChange={(event) => updateEditableElement(element.id, event.target.value)}
-                      className="mt-3 w-full rounded-2xl border border-line/70 bg-white px-4 py-3 text-sm text-ink outline-none transition focus:border-ink/20"
-                    />
-                  )}
                 </div>
               ))}
             </div>
@@ -924,6 +925,25 @@ function ExportWorkspace({
       { edited: 0, compositionDefault: 0, unavailable: 0 },
     );
   }, [editedCompositionPageResults, finalCompositionPages, task.id]);
+  const sourceAlignmentSummary = useMemo(() => {
+    const editedResultMap = new Map(
+      editedCompositionPageResults
+        .filter((item) => item.taskId === task.id)
+        .map((item) => [item.compositionPageId, item] as const),
+    );
+
+    return getCompositionSourceAlignmentSummary(finalCompositionPages, editedResultMap);
+  }, [editedCompositionPageResults, finalCompositionPages, task.id]);
+  const unknownSourceAlignmentPages = useMemo(() => {
+    const editedResultMap = new Map(
+      editedCompositionPageResults
+        .filter((item) => item.taskId === task.id)
+        .map((item) => [item.compositionPageId, item] as const),
+    );
+
+    return getPagesBySourceAlignmentStatus(finalCompositionPages, editedResultMap, "unknown");
+  }, [editedCompositionPageResults, finalCompositionPages, task.id]);
+  const sourceAlignmentInsight = useMemo(() => getCompositionSourceAlignmentInsight(sourceAlignmentSummary), [sourceAlignmentSummary]);
   const isPdfReady = latestAsset?.status === "completed" && latestAsset.fileMimeType === "application/pdf" && latestAsset.downloadUrl.startsWith("data:application/pdf");
   const isProcessing = latestAsset?.status === "preparing" || latestAsset?.status === "processing";
   return (
@@ -1007,6 +1027,54 @@ function ExportWorkspace({
                   当前 Stage 3 readiness 以正式结果对象为准：edited result {readinessSummary.edited} 页，composition 默认结果 {readinessSummary.compositionDefault} 页
                   {readinessSummary.unavailable ? `，暂不可用 ${readinessSummary.unavailable} 页。` : "。"}
                 </p>
+                <p className="mt-2 text-xs leading-6 text-muted">
+                  来源关系状态：aligned {sourceAlignmentSummary.aligned} 页，edited {sourceAlignmentSummary.edited} 页，unknown {sourceAlignmentSummary.unknown} 页。
+                </p>
+                <div className="mt-4 rounded-[18px] border border-line/70 bg-[#f8fafc] p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-ink">{sourceAlignmentInsight.title}</p>
+                    <span
+                      className={`rounded-full px-3 py-1 text-[11px] font-medium ${
+                        sourceAlignmentInsight.tone === "aligned"
+                          ? "bg-emerald-50 text-emerald-700"
+                          : sourceAlignmentInsight.tone === "edited"
+                            ? "bg-amber-50 text-amber-700"
+                            : sourceAlignmentInsight.tone === "mixed"
+                              ? "bg-orange-50 text-orange-700"
+                              : "bg-[#eef2f7] text-muted"
+                      }`}
+                    >
+                      {sourceAlignmentInsight.tone}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs leading-6 text-muted">{sourceAlignmentInsight.detail}</p>
+                  <p className="mt-1 text-xs leading-6 text-muted">{sourceAlignmentInsight.recommendation}</p>
+                  {unknownSourceAlignmentPages.length ? (
+                    <div className="mt-3 rounded-2xl border border-line/70 bg-white p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted">Unknown Pages</p>
+                        <span className="rounded-full bg-[#eef2f7] px-2.5 py-1 text-[11px] text-muted">{unknownSourceAlignmentPages.length} 页</span>
+                      </div>
+                      <div className="mt-2 space-y-2">
+                        {unknownSourceAlignmentPages.slice(0, 5).map(({ page, summary }) => (
+                          <div key={page.id} className="rounded-xl border border-line/60 bg-[#f8fafc] px-3 py-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-muted">
+                                {getPageDisplayLabel(page, finalCompositionPages)}
+                              </span>
+                              <p className="text-xs font-medium text-ink">{page.pageType}</p>
+                              <span className="text-[11px] text-muted">{page.pageKind === "packaging" ? "包装页" : "内容页"}</span>
+                            </div>
+                            <p className="mt-1 text-[11px] leading-5 text-muted">{summary.note}</p>
+                          </div>
+                        ))}
+                      </div>
+                      {unknownSourceAlignmentPages.length > 5 ? (
+                        <p className="mt-2 text-[11px] text-muted">另有 {unknownSourceAlignmentPages.length - 5} 页处于 unknown 状态，当前仅展示前 5 页。</p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </div>
 

@@ -2,6 +2,13 @@ import { useMemo, useState } from "react";
 import { getOrderedCompositionPages } from "@/lib/finalComposition";
 import { formatTime } from "@/lib/format";
 import { HtmlPreviewFrame } from "@/lib/htmlPreview";
+import {
+  getCompositionSourceAlignmentSummary,
+  getPageSourceAlignmentSummary,
+  getSourceAlignmentStatusLabel,
+  getSourceAlignmentStatusTone,
+  type PageSourceAlignmentSummary,
+} from "@/lib/sourceAlignmentSummary";
 import { useAppStore } from "@/store/appStore";
 import type { Asset, FinalCompositionPage } from "@/types/domain";
 
@@ -60,11 +67,13 @@ function PageThumbnail({
   page,
   pageNumber,
   exportFormat,
+  sourceAlignment,
   onClick,
 }: {
   page: FinalCompositionPage;
   pageNumber: number;
   exportFormat: "pdf" | "pptx";
+  sourceAlignment?: PageSourceAlignmentSummary;
   onClick: () => void;
 }) {
   const ratio = getPreviewRatio(exportFormat);
@@ -92,6 +101,11 @@ function PageThumbnail({
       </div>
       <div className="border-t border-line/60 bg-white px-2 py-1.5">
         <p className="truncate text-[10px] font-medium text-ink">{page.pageType}</p>
+        {sourceAlignment ? (
+          <span className={`mt-1 inline-flex rounded-full px-1.5 py-0.5 text-[9px] ${getSourceAlignmentStatusTone(sourceAlignment.status)}`}>
+            {getSourceAlignmentStatusLabel(sourceAlignment.status)}
+          </span>
+        ) : null}
       </div>
     </button>
   );
@@ -257,10 +271,15 @@ export function AssetsPage() {
                 .filter((item) => item.compositionId === asset.compositionId)
                 .map((item) => [item.compositionPageId, item] as const),
             );
+            const rawCompositionPages = getOrderedCompositionPages(
+              composition,
+              finalCompositionPages.filter((page) => page.compositionId === asset.compositionId),
+            );
             const compositionPages = getOrderedCompositionPages(
               composition,
               finalCompositionPages.filter((page) => page.compositionId === asset.compositionId),
             ).map((page) => applyEditedResultToCompositionPage(page, editedResultMap.get(page.id)));
+            const sourceAlignmentSummary = getCompositionSourceAlignmentSummary(rawCompositionPages, editedResultMap);
             const includesPackaging = compositionPages.some((page) => page.pageKind === "packaging");
             const includesContentPageModel = compositionPages.some((page) => page.pageKind === "content" && Boolean(page.sourcePageModel));
             const includesPackagingFormalPage = compositionPages.some((page) => page.pageKind === "packaging" && Boolean(page.sourcePackagingPage));
@@ -308,6 +327,9 @@ export function AssetsPage() {
                         : ""}
                       {asset.resultSourceKind === "edited-result" ? " 当前产物与预览优先展示编辑后页面。" : ""}
                     </p>
+                    <p className="mt-2 text-xs text-muted">
+                      来源关系：aligned {sourceAlignmentSummary.aligned} 页，edited {sourceAlignmentSummary.edited} 页，unknown {sourceAlignmentSummary.unknown} 页。
+                    </p>
 
                     {cleanDescription ? <p className="mt-4 max-w-4xl text-sm leading-7 text-muted">{cleanDescription}</p> : null}
 
@@ -329,6 +351,7 @@ export function AssetsPage() {
                             page={page}
                             pageNumber={page.orderIndex}
                             exportFormat={asset.exportFormat}
+                            sourceAlignment={getPageSourceAlignmentSummary(editedResultMap.get(page.id))}
                             onClick={() => setActivePreview({ compositionId: asset.compositionId, pageIndex: index })}
                           />
                         ))}
