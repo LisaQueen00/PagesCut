@@ -21,6 +21,20 @@ export function createOverviewOllamaTextFragments(page: Page, draft: GeneratedTe
     sourceField: "overviewOllamaDraft",
     sourceBlockId: draft.sourceId,
     label: clampText(fragment.label, 26, `ollama ${draft.model} draft ${index + 1}`),
+    sourceRole: fragment.role,
+    text: fragment.text,
+  }));
+}
+
+export function createSummaryOllamaTextFragments(page: Page, draft: GeneratedTextDraftResult): TextSourceFragment[] {
+  return draft.fragments.map((fragment, index) => ({
+    id: `${page.id}-summary-ollama-draft-${index + 1}`,
+    pageId: page.id,
+    origin: "synthetic",
+    sourceField: "summaryOllamaDraft",
+    sourceBlockId: draft.sourceId,
+    label: clampText(fragment.label, 26, `ollama ${draft.model} summary ${index + 1}`),
+    sourceRole: fragment.role,
     text: fragment.text,
   }));
 }

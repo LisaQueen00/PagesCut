@@ -10,6 +10,7 @@ function normalizeTopic(value: string, fallback: string) {
   return clampText(
     value
       .replace(/^(围绕|关于|总结|建立|生成|制作|收束)/, "")
+      .replace(/\s*(做最终收束|沉淀可带走判断|下一步建议|边界提醒|重新展开综述|明确结论)[\s\S]*$/, "")
       .replace(/[。！？!?\n].*$/, "")
       .trim(),
     34,
@@ -23,22 +24,20 @@ export function createSummaryGeneratedDraftFragments(page: Page): TextSourceFrag
   }
 
   const topic = normalizeTopic(page.outlineText, page.pageType);
-  const style = page.styleText.trim() || "保持克制、清楚、可带走的结论表达";
-  const boundary = page.userConstraints.trim() || "不重新展开全部材料，只把整期判断收束为下一步可用的结论。";
   const generatedAt = "offline-realistic-summary-draft-v1";
 
   const drafts = [
     {
       label: `真实收束草稿 · ${clampText(topic, 18, page.pageType)}`,
-      text: `这一页不再承担“${topic}”的主题进入，也不应该重新展开数据和案例。它更像整期阅读结束前的编辑收口：先把已经出现的变化压缩成少量可带走判断，再提醒读者哪些趋势值得继续观察。`,
+      text: `围绕“${topic}”，已经出现的变化可以收束为一个克制判断：人工智能仍在从能力展示走向真实采用，但不同场景的验证速度并不一致。读者更需要关注持续信号，而不是被单个热点牵引。`,
     },
     {
-      label: `结论段落 · ${clampText(style, 18, "summary tone")}`,
-      text: `按照“${style}”的方向，summary 应该把前文的分散信息折叠成明确结论，而不是再铺一遍背景。它需要直接回答“读完这一期以后应该记住什么”，并把建议控制在能够指导下一步判断的范围内。`,
+      label: `结论段落 · ${clampText(topic, 18, "summary tone")}`,
+      text: `值得带走的不是一个确定答案，而是一组判断线索：能力进展、产品落地、业务采用和组织节奏需要放在一起观察。任何单点变化都不足以替代后续验证。`,
     },
     {
-      label: `行动边界 · ${clampText(boundary, 18, "summary boundary")}`,
-      text: `本页仍要遵守边界：“${boundary}” 因此结束语应该把读者留在清楚的判断和行动落点上，而不是开启新的讨论支线。尚未被充分证明的部分，可以作为后续追踪方向，而不应在总结页伪装成定论。`,
+      label: `观察余地 · ${clampText(topic, 18, "summary signal")}`,
+      text: `尚未被充分证明的部分只适合作为后续追踪方向。更可靠的收束是保留判断弹性：继续看真实使用、成本变化和组织采用节奏是否形成稳定趋势。`,
     },
   ];
 

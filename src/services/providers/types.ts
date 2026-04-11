@@ -61,9 +61,15 @@ export interface OverviewGenerationRequest {
   promptNote: string;
 }
 
+export interface SummaryGenerationRequest {
+  page: Page;
+  promptNote: string;
+}
+
 export interface GeneratedTextDraftFragment {
   label: string;
   text: string;
+  role?: string;
 }
 
 export interface GeneratedTextDraftResult {
@@ -85,6 +91,7 @@ export interface PageGenerationProvider {
 
 export interface GenerationProvider {
   generateOverviewDraft(request: OverviewGenerationRequest, context: ProviderContext): Promise<GeneratedTextDraftResult>;
+  generateSummaryDraft(request: SummaryGenerationRequest, context: ProviderContext): Promise<GeneratedTextDraftResult>;
 }
 
 export interface SearchProvider {

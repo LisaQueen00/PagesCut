@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { createOverviewOllamaTextFragments, createPageSourceSet } from "@/lib/pageSources";
+import { createOverviewOllamaTextFragments, createPageSourceSet, createSummaryOllamaTextFragments } from "@/lib/pageSources";
 import { createSourceAlignmentSnapshot, hydrateHardEditEditableElementAlignment } from "@/lib/hardEditAlignment";
 import { renderPackagingFormalToHtml } from "@/lib/packagingFormal";
 import { renderPageModelToHtml } from "@/lib/pageModel";
@@ -66,7 +66,7 @@ interface AppState {
   canEnterHardEditStage: (taskId: string) => boolean;
   canEnterExportStage: (taskId: string) => boolean;
   getTaskFinalComposition: (taskId: string) => FinalComposition | undefined;
-  enterCandidatesStage: (taskId: string) => void;
+  enterCandidatesStage: (taskId: string) => Promise<void>;
   enterPackagingStage: (taskId: string) => void;
   regeneratePackagingPage: (taskId: string, pageId: string) => void;
   selectPackagingCandidate: (taskId: string, pageId: string, candidateId: string) => void;
@@ -466,21 +466,70 @@ function createMockGeneratedVersion(
   };
 }
 
-async function createOverviewModelGeneratedSourceSet(page: Page, promptNote: string) {
-  if (page.pageRole !== "overview") {
+async function createTextPageModelGeneratedSourceSet(page: Page, promptNote: string) {
+  if (page.pageRole !== "overview" && page.pageRole !== "summary") {
     return null;
   }
 
-  const draft = await services.generationProvider.generateOverviewDraft(
-    {
-      page,
-      promptNote,
-    },
-    { stage: "page-generation" },
+  const draft =
+    page.pageRole === "summary"
+      ? await services.generationProvider.generateSummaryDraft(
+          {
+            page,
+            promptNote,
+          },
+          { stage: "page-generation" },
+        )
+      : await services.generationProvider.generateOverviewDraft(
+          {
+            page,
+            promptNote,
+          },
+          { stage: "page-generation" },
+        );
+
+  const fragments =
+    page.pageRole === "summary"
+      ? createSummaryOllamaTextFragments(page, draft)
+      : createOverviewOllamaTextFragments(page, draft);
+  return createPageSourceSet(page, { generatedTextFragments: fragments });
+}
+
+async function createInitialProviderBackedPageVersions(taskId: string, pages: Page[]) {
+  const targetPages = pages.filter((page) => page.pageRole === "overview" || page.pageRole === "summary");
+  if (!targetPages.length) {
+    return createInitialPageVersions(taskId, pages);
+  }
+
+  const generatedPageSourceSets = new Map<string, PageSourceSet>();
+  const failedRoles: string[] = [];
+
+  await Promise.all(
+    targetPages.map(async (page) => {
+      try {
+        const sourceSet = await createTextPageModelGeneratedSourceSet(page, `初始候选内容生成：${page.outlineText || page.pageType}`);
+        if (sourceSet) {
+          generatedPageSourceSets.set(page.id, sourceSet);
+        }
+      } catch (error) {
+        failedRoles.push(page.pageRole);
+        console.warn(`${page.pageRole} initial local model generation failed; falling back to offline draft.`, error);
+      }
+    }),
   );
 
-  const fragments = createOverviewOllamaTextFragments(page, draft);
-  return createPageSourceSet(page, { generatedTextFragments: fragments });
+  const sourceSummary =
+    generatedPageSourceSets.size === targetPages.length
+      ? `本地 ${services.generationProviderConfig.model} 生成 overview / summary 初始候选内容`
+      : generatedPageSourceSets.size > 0
+        ? `本地 ${services.generationProviderConfig.model} 部分生成初始候选内容，${failedRoles.join(" / ")} 回退离线草稿`
+        : `本地模型不可用，overview / summary 回退离线草稿`;
+
+  return createInitialPageVersions(taskId, pages, generatedPageSourceSets).map((version) => ({
+    ...version,
+    promptNote: `${sourceSummary} · ${version.promptNote}`,
+    variantSummary: `${sourceSummary} · ${version.variantSummary}`,
+  }));
 }
 
 function appendPackagingPreviewsToVersions(versions: PageVersion[], packagingPages: Page[], contentPages: Page[]) {
@@ -1561,19 +1610,21 @@ export const useAppStore = create<AppState>()(
       activeTaskId: null,
       isBootstrapped: false,
       isGenerating: false,
-      bootstrap: () => {
+      bootstrap: async () => {
         if (get().isBootstrapped) {
           return;
         }
 
         const seed = createSeedTask();
+        const contentPages = seed.pages.map((page) => normalizePage(page)).filter((page) => page.pageKind === "content");
+        const initialPageVersions = await createInitialProviderBackedPageVersions(seed.task.id, contentPages);
         set({
           projects: [seed.project],
           tasks: [seed.task],
-          pages: seed.pages.map((page) => normalizePage(page)).filter((page) => page.pageKind === "content"),
+          pages: contentPages,
           packagingPages: [],
           packagingCandidates: [],
-          pageVersions: seed.pageVersions.map((version) => normalizePageVersion(version)),
+          pageVersions: initialPageVersions.map((version) => normalizePageVersion(version)),
           finalCompositions: [],
           finalCompositionPages: [],
           hardEditDrafts: [],
@@ -1587,6 +1638,8 @@ export const useAppStore = create<AppState>()(
         set({ isGenerating: true });
         const result = await services.createTaskFromPrompt(prompt, workType);
         const normalizedPages = result.pages.map((page) => normalizePage(page));
+        const contentPages = normalizedPages.filter((page) => page.pageKind === "content");
+        const initialPageVersions = await createInitialProviderBackedPageVersions(result.task.id, contentPages);
 
         set((state) => ({
           projects: replaceById(state.projects, {
@@ -1596,12 +1649,12 @@ export const useAppStore = create<AppState>()(
             isDefault: true,
           }),
           tasks: [...state.tasks, result.task],
-          pages: [...state.pages.filter((page) => page.taskId !== result.task.id), ...normalizedPages.filter((page) => page.pageKind === "content")],
+          pages: [...state.pages.filter((page) => page.taskId !== result.task.id), ...contentPages],
           packagingPages: state.packagingPages.filter((page) => page.taskId !== result.task.id),
           packagingCandidates: state.packagingCandidates.filter((candidate) => candidate.taskId !== result.task.id),
           pageVersions: [
             ...state.pageVersions,
-            ...createInitialPageVersions(result.task.id, normalizedPages.filter((page) => page.pageKind === "content")).map((version) => normalizePageVersion(version)),
+            ...initialPageVersions.map((version) => normalizePageVersion(version)),
           ],
           finalCompositions: state.finalCompositions.filter((item) => item.taskId !== result.task.id),
           finalCompositionPages: state.finalCompositionPages.filter((page) => page.taskId !== result.task.id),
@@ -1675,7 +1728,23 @@ export const useAppStore = create<AppState>()(
         );
       },
       getTaskFinalComposition: (taskId) => get().finalCompositions.find((item) => item.taskId === taskId),
-      enterCandidatesStage: (taskId) => {
+      enterCandidatesStage: async (taskId) => {
+        const snapshot = get();
+        const task = snapshot.tasks.find((item) => item.id === taskId);
+        if (!task) {
+          return;
+        }
+
+        const taskPages = snapshot.pages.filter((page) => page.taskId === taskId).sort((a, b) => a.index - b.index);
+        if (!canEnterCandidatesStage(taskPages)) {
+          return;
+        }
+
+        const existingVersions = snapshot.pageVersions.filter((version) => version.taskId === taskId);
+        const createdVersions = existingVersions.length
+          ? []
+          : (await createInitialProviderBackedPageVersions(taskId, taskPages)).map((version) => normalizePageVersion(version));
+
         set((state) => {
           const task = state.tasks.find((item) => item.id === taskId);
           if (!task) {
@@ -1688,9 +1757,7 @@ export const useAppStore = create<AppState>()(
           }
 
           const existingVersions = state.pageVersions.filter((version) => version.taskId === taskId);
-          const createdVersions = existingVersions.length
-            ? []
-            : createInitialPageVersions(taskId, taskPages).map((version) => normalizePageVersion(version));
+          const versionsToAppend = existingVersions.length ? [] : createdVersions;
 
           return {
             tasks: state.tasks.map((item) =>
@@ -1702,7 +1769,7 @@ export const useAppStore = create<AppState>()(
                   }
                 : item,
             ),
-            pageVersions: [...state.pageVersions, ...createdVersions],
+            pageVersions: [...state.pageVersions, ...versionsToAppend],
           };
         });
       },
@@ -2226,15 +2293,15 @@ export const useAppStore = create<AppState>()(
 
         const snapshot = get();
         const focusPage = snapshot.pages.find((item) => item.id === pageId && item.taskId === taskId);
-        let overviewModelSourceSet: PageSourceSet | null = null;
+        let modelSourceSet: PageSourceSet | null = null;
         let generationSummary: string | undefined;
-        if (focusPage?.pageRole === "overview") {
+        if (focusPage?.pageRole === "overview" || focusPage?.pageRole === "summary") {
           try {
-            overviewModelSourceSet = await createOverviewModelGeneratedSourceSet(focusPage, trimmedPrompt);
-            generationSummary = `本地 ${services.generationProviderConfig.model} 生成 overview 草稿`;
+            modelSourceSet = await createTextPageModelGeneratedSourceSet(focusPage, trimmedPrompt);
+            generationSummary = `本地 ${services.generationProviderConfig.model} 生成 ${focusPage.pageRole} 草稿`;
           } catch (error) {
-            console.warn("Overview local model generation failed; falling back to offline draft.", error);
-            generationSummary = "本地模型不可用，回退离线 overview 草稿";
+            console.warn(`${focusPage.pageRole} local model generation failed; falling back to offline draft.`, error);
+            generationSummary = `本地模型不可用，回退离线 ${focusPage.pageRole} 草稿`;
           }
         }
 
@@ -2248,8 +2315,8 @@ export const useAppStore = create<AppState>()(
           const taskVersions = state.pageVersions.filter((version) => version.taskId === taskId);
           const selectedVersion = taskVersions.find((version) => version.isSelected);
           const generatedPageSourceSets = new Map<string, PageSourceSet>();
-          if (overviewModelSourceSet) {
-            generatedPageSourceSets.set(focusPage.id, overviewModelSourceSet);
+          if (modelSourceSet) {
+            generatedPageSourceSets.set(focusPage.id, modelSourceSet);
           }
           const nextVersion = createMockGeneratedVersion(
             taskId,

@@ -29,6 +29,80 @@ function createBlockId(prefix: string, index: number) {
   return `${prefix}-${index + 1}`;
 }
 
+function stripReaderInternalText(value: string) {
+  const stripped = value
+    .replace(/主题叙述\s*·\s*[^，。！？!?]+/g, "主题叙述")
+    .replace(/从“[^”]*(像刊首|像刊末|建立总览页|先收束主题判断|先建立总体判断|进入细节页面|后续内容页)[^”]*”的?[^，。！？!?]*[，,]?/g, "")
+    .replace(/在“[^”]*(边界提醒|阅读顺序|不重新展开|过早摊开|后续内容页)[^”]*”这一限制下[，,]?/g, "")
+    .replace(/围绕\s+([^，。！？!?]+?)\s*(建立总览页|做最终收束|先收束主题判断|再给出后续内容页)[^，。！？!?]*/g, "围绕“$1”")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const internalMarkers = [
+    "像刊首",
+    "像刊末",
+    "建立总览页",
+    "先收束主题判断",
+    "先建立总体判断",
+    "进入细节页面",
+    "后续内容页",
+    "这里的正文",
+    "页面策略",
+    "编辑策略",
+    "overview 应该",
+    "summary 应该",
+  ];
+
+  return internalMarkers.some((marker) => stripped.includes(marker)) ? "" : stripped;
+}
+
+function sanitizeReaderBlock(block: PageModelBlock): PageModelBlock | null {
+  switch (block.type) {
+    case "hero": {
+      const summary = stripReaderInternalText(block.summary);
+      return { ...block, summary: summary || block.summary };
+    }
+    case "rich-text": {
+      const paragraphs = block.paragraphs.map((paragraph) => stripReaderInternalText(paragraph)).filter(Boolean);
+      return { ...block, title: stripReaderInternalText(block.title) || "主题叙述", paragraphs: paragraphs.length ? paragraphs : block.paragraphs };
+    }
+    case "callout": {
+      const body = stripReaderInternalText(block.body);
+      return body ? { ...block, body } : null;
+    }
+    case "signal-list": {
+      const items = block.items
+        .map((item) => ({ ...item, detail: stripReaderInternalText(item.detail) }))
+        .filter((item) => item.detail);
+      return items.length ? { ...block, items } : block;
+    }
+    case "bullet-list": {
+      const items = block.items.map((item) => stripReaderInternalText(item)).filter(Boolean);
+      return items.length ? { ...block, items } : block;
+    }
+    case "metrics": {
+      const items = block.items.map((item) => ({ ...item, detail: stripReaderInternalText(item.detail) || "围绕主题保持概括判断。" }));
+      return { ...block, items };
+    }
+    default:
+      return block;
+  }
+}
+
+function sanitizeReaderPageModel(pageModel: PageModel): PageModel {
+  if (pageModel.pageType !== "overview" && pageModel.pageType !== "summary") {
+    return pageModel;
+  }
+
+  return {
+    ...pageModel,
+    regions: pageModel.regions.map((region) => ({
+      ...region,
+      blocks: region.blocks.map((block) => sanitizeReaderBlock(block)).filter((block): block is PageModelBlock => Boolean(block)),
+    })),
+  };
+}
+
 function clampLines(lines: number): CSSProperties {
   return {
     display: "-webkit-box",
@@ -455,7 +529,7 @@ export function fillContractToPageModel(contract: LayoutContract, variant = 0): 
             {
               id: "callout-1",
               type: "callout",
-              title: "主题进入",
+              title: "主题变化",
               body: contract.openingNote,
             },
           ],
@@ -499,7 +573,7 @@ export function fillContractToPageModel(contract: LayoutContract, variant = 0): 
             {
               id: "rich-1",
               type: "rich-text",
-              title: `正文解释 · ${contract.tone}`,
+              title: "主题叙述",
               paragraphs: contract.supportPoints,
             },
           ],
@@ -511,20 +585,8 @@ export function fillContractToPageModel(contract: LayoutContract, variant = 0): 
             {
               id: "callout-2",
               type: "callout",
-              title: "本页判断",
+              title: "读者价值",
               body: contract.highlights[0] ?? contract.openingNote,
-            },
-            {
-              id: "metrics-1",
-              type: "metrics",
-              title: "页内摘要指标",
-              items: contract.signalMetrics,
-            },
-            {
-              id: "list-1",
-              type: "bullet-list",
-              title: "延展观点",
-              items: contract.viewpointCards,
             },
           ],
         },
@@ -657,8 +719,8 @@ export function fillContractToPageModel(contract: LayoutContract, variant = 0): 
             {
               id: "callout-1",
               type: "callout",
-              title: "收束判断",
-              body: contract.finalJudgment,
+              title: "后续观察",
+              body: contract.openingNote,
             },
           ],
         },
@@ -669,7 +731,7 @@ export function fillContractToPageModel(contract: LayoutContract, variant = 0): 
             {
               id: "signal-list-1",
               type: "signal-list",
-              title: "关键结论",
+              title: "判断余地",
               items: contract.conclusionPoints.map((item, index) => ({
                 id: createBlockId("summary-point", index),
                 heading: item.heading,
@@ -698,30 +760,22 @@ export function fillContractToPageModel(contract: LayoutContract, variant = 0): 
                 slotBindings: item.slotBindings,
               })),
             },
-            {
-              id: "list-1",
-              type: "bullet-list",
-              title: "后续建议 / Action Items",
-              items: contract.recommendations,
-            },
           ],
         },
         {
           id: "region-aside",
           name: "aside",
           blocks: [
-            {
-              id: "metrics-1",
-              type: "metrics",
-              title: "收束摘要",
-              items: contract.evidenceMetrics,
-            },
-            {
-              id: "list-2",
-              type: "bullet-list",
-              title: "风险提醒 / 注意事项",
-              items: contract.cautions,
-            },
+            ...(contract.recommendations.length
+              ? [
+                  {
+                    id: "list-2",
+                    type: "bullet-list" as const,
+                    title: "读者带走",
+                    items: contract.recommendations,
+                  },
+                ]
+              : []),
             {
               id: "rich-1",
               type: "rich-text",
@@ -1487,6 +1541,10 @@ function getOverviewMainColumnRows(mainBlocks: PageModelBlock[]) {
   const slotsBlock = mainBlocks.find((block) => block.type === "content-slots");
   const slotCount = slotsBlock?.type === "content-slots" ? slotsBlock.items.length : 0;
 
+  if (!slotsBlock) {
+    return "minmax(0, 0.82fr) minmax(0, 1.02fr)";
+  }
+
   if (slotCount >= 3) {
     return "minmax(0, 0.72fr) minmax(0, 0.52fr) minmax(0, 0.86fr)";
   }
@@ -1634,6 +1692,10 @@ function getSummaryMainColumnRows(mainBlocks: PageModelBlock[]) {
   const slotsBlock = mainBlocks.find((block) => block.type === "content-slots");
   const slotCount = slotsBlock?.type === "content-slots" ? slotsBlock.items.length : 0;
 
+  if (!slotsBlock) {
+    return "minmax(0, 1.16fr) minmax(0, 0.84fr)";
+  }
+
   if (slotCount >= 3) {
     return "minmax(0, 0.82fr) minmax(0, 0.5fr) minmax(0, 0.68fr)";
   }
@@ -1653,38 +1715,43 @@ function getSummaryAsideColumnRows(mainBlocks: PageModelBlock[]) {
 }
 
 export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
-  const heroRegion = pageModel.regions.find((region) => region.name === "hero");
-  const mainRegion = pageModel.regions.find((region) => region.name === "main");
-  const asideRegion = pageModel.regions.find((region) => region.name === "aside");
+  const safePageModel = sanitizeReaderPageModel(pageModel);
+  const heroRegion = safePageModel.regions.find((region) => region.name === "hero");
+  const mainRegion = safePageModel.regions.find((region) => region.name === "main");
+  const asideRegion = safePageModel.regions.find((region) => region.name === "aside");
   const heroBlocks = heroRegion?.blocks ?? [];
   const mainBlocks = mainRegion?.blocks ?? [];
   const asideBlocks = asideRegion?.blocks ?? [];
-  const density = getPageRenderDensity(pageModel, mainBlocks, asideBlocks);
+  const readerVisibleMainBlocks =
+    safePageModel.pageType === "overview" || safePageModel.pageType === "summary"
+      ? mainBlocks.filter((block) => block.type !== "content-slots")
+      : mainBlocks;
+  const density = getPageRenderDensity(safePageModel, readerVisibleMainBlocks, asideBlocks);
 
   return (
     <article
       style={{
         width: PAGE_MODEL_BASE_WIDTH,
         height: PAGE_MODEL_BASE_HEIGHT,
-        border: `1px solid ${pageModel.theme.border}`,
+        border: `1px solid ${safePageModel.theme.border}`,
         borderRadius: 28,
         background: "white",
         padding: density === "compact" ? 24 : 28,
         boxShadow: "0 18px 34px rgba(15,23,42,0.06)",
         fontFamily: "'Avenir Next','PingFang SC','Noto Sans SC',sans-serif",
-        color: pageModel.theme.ink,
+        color: safePageModel.theme.ink,
         boxSizing: "border-box",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
       }}
-      data-page-model-type={pageModel.pageType}
-      data-layout-key={pageModel.layoutKey}
+      data-page-model-type={safePageModel.pageType}
+      data-layout-key={safePageModel.layoutKey}
     >
-      {pageModel.pageType === "overview" ? (
+      {safePageModel.pageType === "overview" ? (
         <>
-          {heroBlocks.length ? <div style={{ ...getHeroLayout(pageModel.pageType), minWidth: 0 }}>{heroBlocks.map((block) => renderBlock(block, pageModel.theme, density))}</div> : null}
-          <section style={getBodyLayout(pageModel.pageType)}>
+          {heroBlocks.length ? <div style={{ ...getHeroLayout(safePageModel.pageType), minWidth: 0 }}>{heroBlocks.map((block) => renderBlock(block, safePageModel.theme, density))}</div> : null}
+          <section style={getBodyLayout(safePageModel.pageType)}>
             <div
               style={{
                 display: "grid",
@@ -1692,10 +1759,10 @@ export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
                 minHeight: 0,
                 minWidth: 0,
                 height: "100%",
-                gridTemplateRows: getOverviewMainColumnRows(mainBlocks),
+                gridTemplateRows: getOverviewMainColumnRows(readerVisibleMainBlocks),
               }}
             >
-              {mainBlocks.map((block) => renderBlock(block, pageModel.theme, density))}
+              {readerVisibleMainBlocks.map((block) => renderBlock(block, safePageModel.theme, density))}
             </div>
             <div
               style={{
@@ -1707,14 +1774,14 @@ export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
                 gridTemplateRows: getOverviewAsideColumnRows(mainBlocks),
               }}
             >
-              {asideBlocks.map((block) => renderBlock(block, pageModel.theme, density))}
+              {asideBlocks.map((block) => renderBlock(block, safePageModel.theme, density))}
             </div>
           </section>
         </>
-      ) : pageModel.pageType === "case" ? (
+      ) : safePageModel.pageType === "case" ? (
         <>
-          {heroBlocks.length ? <div style={{ ...getHeroLayout(pageModel.pageType), minWidth: 0 }}>{heroBlocks.map((block) => renderBlock(block, pageModel.theme, density))}</div> : null}
-          <section style={getBodyLayout(pageModel.pageType)}>
+          {heroBlocks.length ? <div style={{ ...getHeroLayout(safePageModel.pageType), minWidth: 0 }}>{heroBlocks.map((block) => renderBlock(block, safePageModel.theme, density))}</div> : null}
+          <section style={getBodyLayout(safePageModel.pageType)}>
             <div
               style={{
                 display: "grid",
@@ -1725,7 +1792,7 @@ export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
                 gridTemplateRows: getCaseMainColumnRows(mainBlocks),
               }}
             >
-              {mainBlocks.map((block) => renderBlock(block, pageModel.theme, density))}
+              {mainBlocks.map((block) => renderBlock(block, safePageModel.theme, density))}
             </div>
             <div
               style={{
@@ -1737,14 +1804,14 @@ export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
                 gridTemplateRows: getCaseAsideColumnRows(mainBlocks),
               }}
             >
-              {asideBlocks.map((block) => renderBlock(block, pageModel.theme, density))}
+              {asideBlocks.map((block) => renderBlock(block, safePageModel.theme, density))}
             </div>
           </section>
         </>
-      ) : pageModel.pageType === "summary" ? (
+      ) : safePageModel.pageType === "summary" ? (
         <>
-          {heroBlocks.length ? <div style={{ ...getHeroLayout(pageModel.pageType), minWidth: 0 }}>{heroBlocks.map((block) => renderBlock(block, pageModel.theme, density))}</div> : null}
-          <section style={getBodyLayout(pageModel.pageType)}>
+          {heroBlocks.length ? <div style={{ ...getHeroLayout(safePageModel.pageType), minWidth: 0 }}>{heroBlocks.map((block) => renderBlock(block, safePageModel.theme, density))}</div> : null}
+          <section style={getBodyLayout(safePageModel.pageType)}>
             <div
               style={{
                 display: "grid",
@@ -1752,10 +1819,10 @@ export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
                 minHeight: 0,
                 minWidth: 0,
                 height: "100%",
-                gridTemplateRows: getSummaryMainColumnRows(mainBlocks),
+                gridTemplateRows: getSummaryMainColumnRows(readerVisibleMainBlocks),
               }}
             >
-              {mainBlocks.map((block) => renderBlock(block, pageModel.theme, density))}
+              {readerVisibleMainBlocks.map((block) => renderBlock(block, safePageModel.theme, density))}
             </div>
             <div
               style={{
@@ -1767,14 +1834,14 @@ export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
                 gridTemplateRows: getSummaryAsideColumnRows(mainBlocks),
               }}
             >
-              {asideBlocks.map((block) => renderBlock(block, pageModel.theme, density))}
+              {asideBlocks.map((block) => renderBlock(block, safePageModel.theme, density))}
             </div>
           </section>
         </>
       ) : (
         <>
-          {heroBlocks[0] ? <div>{renderBlock(heroBlocks[0], pageModel.theme, density)}</div> : null}
-          <section style={getBodyLayout(pageModel.pageType)}>
+          {heroBlocks[0] ? <div>{renderBlock(heroBlocks[0], safePageModel.theme, density)}</div> : null}
+          <section style={getBodyLayout(safePageModel.pageType)}>
             <div
               style={{
                 display: "grid",
@@ -1785,7 +1852,7 @@ export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
                 gridTemplateRows: getDataMainColumnRows(mainBlocks),
               }}
             >
-              {mainBlocks.map((block) => renderBlock(block, pageModel.theme, density))}
+              {mainBlocks.map((block) => renderBlock(block, safePageModel.theme, density))}
             </div>
             <div
               style={{
@@ -1797,7 +1864,7 @@ export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
                 gridTemplateRows: getDataAsideColumnRows(mainBlocks),
               }}
             >
-              {asideBlocks.map((block) => renderBlock(block, pageModel.theme, density))}
+              {asideBlocks.map((block) => renderBlock(block, safePageModel.theme, density))}
             </div>
           </section>
         </>

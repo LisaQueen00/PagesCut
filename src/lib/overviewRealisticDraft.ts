@@ -10,6 +10,7 @@ function normalizeTopic(value: string, fallback: string) {
   return clampText(
     value
       .replace(/^(围绕|关于|总结|建立|生成|制作)/, "")
+      .replace(/\s*(建立总览页|先收束主题判断|先建立总体判断|再进入细节页面|再给出后续内容页|给出后续内容页)[\s\S]*$/, "")
       .replace(/[。！？!?\n].*$/, "")
       .trim(),
     34,
@@ -23,22 +24,20 @@ export function createOverviewGeneratedDraftFragments(page: Page): TextSourceFra
   }
 
   const topic = normalizeTopic(page.outlineText, page.pageType);
-  const style = page.styleText.trim() || "保持专业、克制、清晰的编辑判断";
-  const boundary = page.userConstraints.trim() || "只在总览页完成主题校准，不提前铺开全部细节。";
   const generatedAt = "offline-realistic-overview-draft-v1";
 
   const drafts = [
     {
       label: `真实草稿 · ${clampText(topic, 18, page.pageType)}`,
-      text: `这页的重点不是把“${topic}”拆成一组松散条目，而是先给读者一个可以带着往后读的判断框架。当前主题已经从单点事件转向连续变化：模型能力、产品落地、业务采用和组织节奏正在互相牵引，读者需要先知道哪些变化值得优先关注。`,
+      text: `“${topic}”正在从单点事件转向连续变化：模型能力、产品落地、业务采用和组织节奏互相牵引。读者需要先识别哪些变化已经形成连续信号，哪些仍停留在概念热度和短期讨论中。`,
     },
     {
-      label: `判断段落 · ${clampText(style, 18, "overview tone")}`,
-      text: `按照“${style}”的表达方向，overview 应该先用少量高密度段落完成总览判断，再把数据页和案例页留给后续证明。这里的正文不应只是复述大纲，而要把主线、节奏和阅读顺序组织起来，让页面像一段编辑导语，而不是占位文案。`,
+      label: `判断段落 · ${clampText(topic, 18, "overview tone")}`,
+      text: `当前更值得关注的是变化之间的关系：能力提升会推动产品试探，产品试探又会反过来改变组织采用节奏。真正有价值的判断来自这些关系，而不是单个热点词的堆叠。`,
     },
     {
-      label: `边界段落 · ${clampText(boundary, 18, "overview boundary")}`,
-      text: `本页仍要遵守边界：“${boundary}” 因此它只承担入口和判断校准，不替代后面的数据支撑、案例拆解或最终总结。更适合的处理方式是把不确定性说清楚，把读者的注意力导向后续页面，而不是在第一页就把所有材料摊满。`,
+      label: `观察段落 · ${clampText(topic, 18, "overview signal")}`,
+      text: `尚未被材料证明的具体公司、金额和指标不宜被写成事实。更稳妥的判断是：人工智能趋势仍处在快速扩散和持续验证之间，读者需要把注意力放在真实采用信号上。`,
     },
   ];
 

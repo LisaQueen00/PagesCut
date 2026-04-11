@@ -72,13 +72,15 @@ export interface TextSourceFragment {
   text: string;
   label: string;
   sourceBlockId?: string;
+  sourceRole?: string;
   sourceField?:
     | "outlineText"
     | "styleText"
     | "userConstraints"
     | "overviewGeneratedDraft"
     | "summaryGeneratedDraft"
-    | "overviewOllamaDraft";
+    | "overviewOllamaDraft"
+    | "summaryOllamaDraft";
 }
 
 export interface PageSourceSet {
@@ -383,6 +385,7 @@ export interface GeneratedSummaryContractInput {
   versionLabel: string;
   title: string;
   finalJudgment: string;
+  openingNote: string;
   conclusionPoints: {
     heading: string;
     detail: string;

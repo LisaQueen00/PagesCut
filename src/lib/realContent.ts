@@ -34,6 +34,103 @@ function pickFirstMeaningful(value: string, fallback: string) {
   return splitSentences(value)[0] || fallback;
 }
 
+function getNarrativeTopic(page: Page) {
+  const topic = (page.outlineText || page.pageType)
+    .replace(/^(围绕|关于|总结|建立|生成|制作|收束|提炼)\s*/, "")
+    .replace(/\s*(建立总览页|做最终收束|沉淀可带走判断|给出后续内容页|先收束主题判断|先建立总体判断|再进入细节页面|再给出后续内容页|下一步建议|边界提醒|提炼一页|选择一个真实业务场景)[\s\S]*$/, "")
+    .replace(/[。！？!?\n].*$/, "")
+    .replace(/(月刊|周报|日报|报告|PPT|幻灯片|作品)$/i, "")
+    .trim();
+
+  return topic || page.pageType;
+}
+
+function withSentenceEnd(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return /[。！？!?]$/.test(trimmed) ? trimmed : `${trimmed}。`;
+}
+
+function isInternalOrMetaText(value: string) {
+  const normalized = value.toLowerCase();
+  const markers = [
+    "本页",
+    "这页",
+    "这一页",
+    "这里的正文",
+    "这里",
+    "本页判断",
+    "阅读路径",
+    "承担",
+    "承接",
+    "边界",
+    "更适合的处理方式",
+    "不应只是",
+    "重点不是",
+    "应该",
+    "如何组织",
+    "页面策略",
+    "编辑策略",
+    "pageintent",
+    "pagecontentplan",
+    "renderer",
+    "contract",
+    "assembly",
+    "text unit",
+    "text slot",
+    "slot",
+    "requested",
+    "resolved",
+    "filled",
+    "unfilled",
+    "fill rule",
+    "source",
+    "debug",
+    "mock",
+    "overview 应该",
+    "summary 应该",
+    "像刊首",
+    "像刊末",
+    "建立总览页",
+    "先收束主题判断",
+    "先建立总体判断",
+    "进入细节页面",
+    "后续内容页",
+    "这一限制下",
+    "职责",
+  ];
+
+  return markers.some((marker) => normalized.includes(marker));
+}
+
+function normalizeReaderFacingText(value: string, fallback = "") {
+  const readerSentences = splitSentences(value).filter((sentence) => !isInternalOrMetaText(sentence));
+  if (readerSentences.length) {
+    return readerSentences.map(withSentenceEnd).join("");
+  }
+
+  return fallback && !isInternalOrMetaText(fallback) ? fallback : "";
+}
+
+function uniqueTextItems(items: string[], fallbackItems: string[]) {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+
+  [...items, ...fallbackItems].forEach((item) => {
+    const normalized = item.replace(/\s+/g, "");
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+
+    seen.add(normalized);
+    unique.push(item);
+  });
+
+  return unique;
+}
+
 function ensureItems<T>(items: T[], fallbackItems: T[], minimum: number) {
   const next = items.slice();
   let cursor = 0;
@@ -64,10 +161,11 @@ function parseIssueLabel(prompt: string) {
   return `${year} / ${String(month).padStart(2, "0")}`;
 }
 
-function getPreferredTextValues(
+function getReaderFacingTextValues(
   page: Page,
   pageSourceSet: PageSourceSet | null | undefined,
   preferredSyntheticOrder: Array<NonNullable<TextSourceFragment["sourceField"]>>,
+  fallbackItems: string[],
 ) {
   const sourceTexts = pageSourceSet
     ? [
@@ -76,38 +174,97 @@ function getPreferredTextValues(
         ),
         ...pageSourceSet.textFragments.filter((item) => item.origin === "user-block"),
       ]
-        .map((item) => item.text.trim())
+        .map((item) => normalizeReaderFacingText(item.text))
         .filter(Boolean)
     : [];
+
   if (sourceTexts.length) {
     return sourceTexts;
   }
 
-  const textBlocks = page.userProvidedContentBlocks
+  const rawTextBlocks = page.userProvidedContentBlocks
     .filter((block): block is Extract<Page["userProvidedContentBlocks"][number], { type: "text" }> => block.type === "text")
-    .map((block) => block.text.trim())
+    .map((block) => normalizeReaderFacingText(block.text))
     .filter(Boolean);
-  const fallbacks = [page.outlineText, page.styleText, page.userConstraints].map((item) => item.trim()).filter(Boolean);
-  return [...textBlocks, ...fallbacks];
+  if (rawTextBlocks.length) {
+    return rawTextBlocks;
+  }
+
+  return fallbackItems.map((item) => normalizeReaderFacingText(item, item)).filter(Boolean);
+}
+
+function getReaderFacingTextByRole(pageSourceSet: PageSourceSet | null | undefined, role: string) {
+  const fragment = pageSourceSet?.textFragments.find((item) => item.origin === "synthetic" && item.sourceRole === role);
+  return fragment ? normalizeReaderFacingText(fragment.text) : "";
 }
 
 function buildOverviewBaseTexts(page: Page, pageSourceSet?: PageSourceSet | null) {
-  const combined = getPreferredTextValues(page, pageSourceSet, ["overviewOllamaDraft", "overviewGeneratedDraft", "outlineText", "styleText", "userConstraints"]);
+  const topic = clampText(getNarrativeTopic(page), 30, page.pageType);
+  const combined = getReaderFacingTextValues(page, pageSourceSet, ["overviewOllamaDraft", "overviewGeneratedDraft"], [
+    `围绕“${topic}”，人工智能相关变化正在从单点事件转向连续演进，模型能力、产品落地与组织采用相互牵引。`,
+    "读者最需要关注的是哪些变化已经形成连续信号，哪些仍停留在概念热度和短期讨论中。",
+    "输入信息仍有限时，综述段落保持概括判断，避免把未核验细节写成确定事实。",
+  ]);
 
   return {
-    primary: combined[0] || "本页需要先完成主题进入和总体判断。",
-    secondary: combined[1] || page.styleText.trim() || "整体表达应保持清晰、克制和连续阅读节奏。",
-    tertiary: combined[2] || page.userConstraints.trim() || "控制信息层级，避免在总览页过早堆叠细节。",
+    primary:
+      getReaderFacingTextByRole(pageSourceSet, "overviewHero") ||
+      combined[0] ||
+      `围绕“${topic}”，人工智能相关变化正在从单点事件转向连续演进。`,
+    secondary:
+      getReaderFacingTextByRole(pageSourceSet, "overviewThemeChange") ||
+      combined[1] ||
+      "模型能力、产品落地与组织采用相互牵引，读者需要识别哪些变化正在形成连续信号。",
+    tertiary:
+      getReaderFacingTextByRole(pageSourceSet, "overviewObservationFocus") ||
+      combined[2] ||
+      "输入信息仍有限时，综述段落保持概括判断，避免把未核验细节写成确定事实。",
+    relationship:
+      getReaderFacingTextByRole(pageSourceSet, "overviewRelationshipJudgment") ||
+      combined[1] ||
+      "变化之间的关系比单点热点更值得关注。",
+    narrative:
+      getReaderFacingTextByRole(pageSourceSet, "overviewNarrative") ||
+      combined[3] ||
+      "能力、产品和组织节奏之间的相互牵引，决定了后续内容需要继续验证哪些信号。",
+    readerValue:
+      getReaderFacingTextByRole(pageSourceSet, "overviewReaderValue") ||
+      combined[4] ||
+      "读者更需要识别真实采用信号，而不是被未经核验的具体细节牵引。",
+    all: combined,
   };
 }
 
 function buildSummaryBaseTexts(page: Page, pageSourceSet?: PageSourceSet | null) {
-  const combined = getPreferredTextValues(page, pageSourceSet, ["summaryGeneratedDraft", "outlineText", "userConstraints", "styleText"]);
+  const topic = clampText(getNarrativeTopic(page), 30, page.pageType);
+  const combined = getReaderFacingTextValues(page, pageSourceSet, ["summaryOllamaDraft", "summaryGeneratedDraft"], [
+    `围绕“${topic}”，整期内容可以收束为少量可带走的判断。`,
+    "接下来更适合继续观察关键变化和支撑信号，而不是把尚未证明的内容写成定论。",
+    "人工智能趋势仍处在快速扩散和持续验证之间，清楚但克制的判断比强结论更可靠。",
+  ]);
 
   return {
-    primary: combined[0] || "本页需要把整期内容收束成最终判断，而不是继续展开。",
-    secondary: combined[1] || page.userConstraints.trim() || "结论应控制在少量可带走判断内。",
-    tertiary: combined[2] || page.styleText.trim() || "收束页应保持克制、清楚和可执行。",
+    primary:
+      getReaderFacingTextByRole(pageSourceSet, "summaryFinalJudgment") ||
+      combined[0] ||
+      `围绕“${topic}”，整期内容可以收束为少量可带走的判断。`,
+    secondary:
+      getReaderFacingTextByRole(pageSourceSet, "summaryNextSignals") ||
+      combined[1] ||
+      "接下来更适合继续观察关键变化和支撑信号，而不是给出过强结论。",
+    tertiary:
+      getReaderFacingTextByRole(pageSourceSet, "summaryUncertainty") ||
+      combined[2] ||
+      "人工智能趋势仍处在快速扩散和持续验证之间，清楚但克制的判断比强结论更可靠。",
+    closing:
+      getReaderFacingTextByRole(pageSourceSet, "summaryClosingNote") ||
+      combined[3] ||
+      "后续判断需要继续等待真实采用和支撑信号，而不是提前变成强结论。",
+    readerTakeaway:
+      getReaderFacingTextByRole(pageSourceSet, "summaryReaderTakeaway") ||
+      combined[4] ||
+      "更稳妥的带走信息，是把注意力放在持续变化和可验证信号上。",
+    all: combined,
   };
 }
 
@@ -119,9 +276,25 @@ export function generateOverviewContractInput(
   pageSourceSet?: PageSourceSet | null,
 ): GeneratedOverviewContractInput {
   const baseTexts = buildOverviewBaseTexts(page, pageSourceSet);
-  const topic = clampText(pickFirstMeaningful(page.outlineText, page.pageType), 30, page.pageType);
+  const topic = clampText(getNarrativeTopic(page), 30, page.pageType);
   const tone = page.styleText.trim() || "结构清晰、克制专业";
-  const constraint = page.userConstraints.trim() || "保持总览页的判断优先级。";
+  const constraint = page.userConstraints.trim() || "保持主题判断优先级。";
+  const overviewTexts = uniqueTextItems(baseTexts.all, [
+    baseTexts.primary,
+    baseTexts.secondary,
+    baseTexts.relationship,
+    baseTexts.tertiary,
+    baseTexts.narrative,
+    baseTexts.readerValue,
+    "最值得关注的是模型能力、产品落地和业务采用之间的相互牵引。",
+    "数据和案例会决定这些变化是短期热度，还是已经进入持续验证。",
+    "输入信息有限时，概括判断优先于具体公司、金额和指标断言。",
+  ]);
+  const heroSummary = overviewTexts[0] ?? baseTexts.primary;
+  const calloutText = baseTexts.secondary;
+  const signalTexts = [baseTexts.relationship, baseTexts.tertiary];
+  const supportPoints = [baseTexts.narrative].filter(Boolean);
+  const asideText = baseTexts.readerValue;
   const textUnit = contentPlan?.units.find((unit) => unit.unitType === "text");
   const textAssembly = textUnit?.assembly;
   const textUnits = Array.from({ length: textUnit?.resolvedCount ?? 0 }, (_, index) => {
@@ -136,40 +309,26 @@ export function generateOverviewContractInput(
   });
 
   const highlights = [
-    `核心主题：${topic}`,
-    `表达倾向：${clampText(baseTexts.secondary, 26, tone)}`,
-    `页面边界：${clampText(baseTexts.tertiary, 26, constraint)}`,
+    clampText(pickFirstMeaningful(asideText, topic), 34, topic),
+    clampText(pickFirstMeaningful(calloutText, tone), 34, tone),
+    clampText(pickFirstMeaningful(signalTexts[2] ?? baseTexts.tertiary, constraint), 34, constraint),
   ];
 
   const signalItems = [
     {
-      heading: "主题判断",
-      detail: `${pickFirstMeaningful(baseTexts.primary, topic)}，本页先承担进入整期内容前的判断校准。`,
+      heading: "关系判断",
+      detail: signalTexts[0] ?? baseTexts.primary,
     },
     {
-      heading: "阅读组织",
-      detail: `${pickFirstMeaningful(baseTexts.secondary, tone)}，因此当前 overview 应优先组织摘要、信号与正文解释的顺序。`,
+      heading: "观察重点",
+      detail: signalTexts[1] ?? baseTexts.secondary,
     },
-    {
-      heading: "页面边界",
-      detail: `${pickFirstMeaningful(baseTexts.tertiary, constraint)}，避免让总览页退回到松散堆料。`,
-    },
-  ];
-
-  const supportPoints = [
-    `${pickFirstMeaningful(baseTexts.primary, topic)}。这决定了 overview 的第一职责不是补完所有细节，而是把读者带到正确的主题判断上。`,
-    `${pickFirstMeaningful(baseTexts.secondary, tone)}。因此正文解释应围绕判断展开，而不是重新平铺一份素材清单。`,
-    `${pickFirstMeaningful(baseTexts.tertiary, constraint)}。这意味着后续案例页、数据页和总结页需要继续承接，而不是让 overview 独自完成整期表达。`,
-    pageIntent.textDensity === "high"
-      ? "当前 PageIntent 允许更高的文本密度，所以正文区需要保留足够解释层，而不是只剩下口号式摘要。"
-      : "当前 PageIntent 更偏向中低文本密度，因此正文解释应收束到少量关键段落，保持整体进入感。",
   ];
 
   const viewpointCards = [
-    `本页先回答“这期最重要的变化是什么”，再引导读者进入后续页面。`,
-    `真实内容接入后，overview 的价值在于组织判断，而不是代替 case 或 data 页。`,
-    `PageContentPlan 当前只承接 text unit，因此 contract 必须显式把这些文本单元组织成可阅读的判断链。`,
-    `Renderer 只负责消费已经成立的 contract，不再重新决定哪些内容应该出现。`,
+    baseTexts.readerValue,
+    overviewTexts.find((item) => item !== heroSummary && item !== calloutText && item !== baseTexts.relationship && item !== baseTexts.tertiary) ??
+      "数据和案例会决定这些变化是短期热度，还是已经进入持续验证。",
   ];
 
   return {
@@ -178,29 +337,29 @@ export function generateOverviewContractInput(
     pageId: page.id,
     versionLabel,
     title: page.pageType,
-    outline: baseTexts.primary,
+    outline: heroSummary,
     tone,
-    openingNote: `本页围绕“${topic}”建立主题进入，并先完成整体判断，再把读者送往后续支撑页面。`,
+    openingNote: calloutText,
     highlights,
     signalItems,
     signalMetrics: [
       {
         id: "overview-metric-1",
-        label: "表达模式",
-        value: pageIntent.expressionMode,
-        detail: "当前 overview 仍是判断驱动，不向图表或案例叙事让位。",
+        label: "主题信号",
+        value: "连续演进",
+        detail: clampText(pickFirstMeaningful(asideText, topic), 42, topic),
       },
       {
         id: "overview-metric-2",
-        label: "文本密度",
-        value: pageIntent.textDensity,
-        detail: "该密度直接影响正文解释层需要保留多少段落。",
+        label: "关系判断",
+        value: pageIntent.textDensity === "high" ? "展开观察" : "克制概括",
+        detail: clampText(pickFirstMeaningful(baseTexts.secondary, tone), 42, tone),
       },
       {
         id: "overview-metric-3",
-        label: "内容区域",
-        value: String(pageIntent.requiredContentAreas.length),
-        detail: `当前需要承接：${pageIntent.requiredContentAreas.join(" / ")}`,
+        label: "读者价值",
+        value: "识别重点",
+        detail: "把注意力放在真实采用信号，而不是未核验细节。",
       },
     ],
     viewpointCards,
@@ -225,9 +384,15 @@ export function generateSummaryContractInput(
   pageSourceSet?: PageSourceSet | null,
 ): GeneratedSummaryContractInput {
   const baseTexts = buildSummaryBaseTexts(page, pageSourceSet);
-  const topic = clampText(pickFirstMeaningful(page.outlineText, page.pageType), 30, page.pageType);
-  const boundary = page.userConstraints.trim() || "收束页不重新展开整期内容。";
+  const topic = clampText(getNarrativeTopic(page), 30, page.pageType);
+  const boundary = page.userConstraints.trim() || "主题结论保持克制。";
   const tone = page.styleText.trim() || "克制、收束、可带走";
+  const finalJudgment = baseTexts.primary;
+  const calloutJudgment = baseTexts.secondary;
+  const conclusionTexts = [baseTexts.tertiary];
+  const recommendationItems = [baseTexts.readerTakeaway].filter((item) => item && item !== calloutJudgment);
+  const cautionItems = [baseTexts.tertiary].filter(Boolean);
+  const closingNote = baseTexts.closing;
   const textUnit = contentPlan?.units.find((unit) => unit.unitType === "text");
   const textAssembly = textUnit?.assembly;
   const textUnits = Array.from({ length: textUnit?.resolvedCount ?? 0 }, (_, index) => {
@@ -243,31 +408,13 @@ export function generateSummaryContractInput(
 
   const conclusionPoints = [
     {
-      heading: "最终判断",
-      detail: `${pickFirstMeaningful(baseTexts.primary, topic)}，summary 的第一职责是把整期阅读折叠成可带走的判断。`,
-    },
-    {
-      heading: "行动落点",
-      detail: `${pickFirstMeaningful(baseTexts.tertiary, tone)}，因此建议区应直接服务下一步行动，而不是回到背景铺陈。`,
-    },
-    {
-      heading: "边界提醒",
-      detail: `${pickFirstMeaningful(baseTexts.secondary, boundary)}，这决定了 summary 不能退回 overview 式主题进入页。`,
+      heading: "判断余地",
+      detail: conclusionTexts[0] ?? baseTexts.tertiary,
     },
   ];
 
-  const recommendations = [
-    `先把“${topic}”压缩为两到三个后续观察点，再进入下一轮追踪。`,
-    "只保留最能指导下一步判断的结论，不把收束页重新做成完整综述。",
-    pageIntent.textDensity === "high"
-      ? "当前允许稍高文本密度，但仍应围绕结论、建议和边界提醒组织，不继续发散。"
-      : "当前文本密度应保持节制，建议区需要短而可执行。",
-  ];
-
-  const cautions = [
-    `${pickFirstMeaningful(baseTexts.secondary, boundary)}，不要把收束页重新扩成问题清单。`,
-    "不要把单页结论伪装成全量论证，summary 负责收束，不负责重新证明整期内容。",
-  ];
+  const recommendations = recommendationItems;
+  const cautions = cautionItems;
 
   return {
     sourceKind: "generated",
@@ -275,30 +422,30 @@ export function generateSummaryContractInput(
     pageId: page.id,
     versionLabel,
     title: page.pageType,
-    finalJudgment: `${pickFirstMeaningful(baseTexts.primary, topic)}，当前页面应以“可带走的最终判断”结束阅读。`,
+    finalJudgment,
+    openingNote: calloutJudgment,
     conclusionPoints,
     recommendations,
     cautions,
-    closingNote:
-      `${pickFirstMeaningful(baseTexts.tertiary, tone)}。因此这一页的结束语应把读者留在明确判断和下一步行动上，而不是再次打开新的讨论支线。`,
+    closingNote,
     evidenceMetrics: [
       {
         id: "summary-metric-1",
-        label: "表达模式",
-        value: pageIntent.expressionMode,
-        detail: "summary 仍是 text-led，但它的职责是收束，不是主题进入。",
+        label: "收束重点",
+        value: "最终判断",
+        detail: clampText(pickFirstMeaningful(baseTexts.primary, topic), 42, topic),
       },
       {
         id: "summary-metric-2",
-        label: "文本密度",
-        value: pageIntent.textDensity,
-        detail: "该密度决定收束页能保留多少解释层，而不是决定是否继续扩材料。",
+        label: "观察重点",
+        value: pageIntent.textDensity === "high" ? "克制展开" : "继续观察",
+        detail: clampText(pickFirstMeaningful(baseTexts.tertiary, tone), 42, tone),
       },
       {
         id: "summary-metric-3",
-        label: "收束单元",
-        value: `${textUnit?.resolvedCount ?? 0}`,
-        detail: `当前 assembly：requested ${textUnit?.requestedCount ?? 0} / filled ${textUnit?.filledCount ?? 0}`,
+        label: "判断余地",
+        value: "保持克制",
+        detail: clampText(pickFirstMeaningful(baseTexts.secondary, boundary), 42, boundary),
       },
     ],
     textUnits,

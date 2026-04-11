@@ -1451,16 +1451,23 @@ export function buildPackagingPreviewHtml(
   });
 }
 
-function buildSchemePreviewMap(pages: Page[], versionLabel: string, promptNote: string, variantSeed = 0, familyOverride?: number) {
+function buildSchemePreviewMap(
+  pages: Page[],
+  versionLabel: string,
+  promptNote: string,
+  variantSeed = 0,
+  familyOverride?: number,
+  providedPageSourceSets: Map<string, PageSourceSet> = new Map(),
+) {
   return Object.fromEntries(
     pages.map((page, index) => [
       page.id,
-      buildMockPreviewHtml(page, versionLabel, promptNote, variantSeed + index, familyOverride),
+      buildMockPreviewHtml(page, versionLabel, promptNote, variantSeed + index, familyOverride, providedPageSourceSets.get(page.id)),
     ]),
   );
 }
 
-function createMockVersionSet(taskId: string, pages: Page[], variantSeed = 0): PageVersion[] {
+function createMockVersionSet(taskId: string, pages: Page[], variantSeed = 0, providedPageSourceSets: Map<string, PageSourceSet> = new Map()): PageVersion[] {
   const now = Date.now();
   return Array.from({ length: INITIAL_MOCK_VERSION_COUNT }, (_, index) => {
     const versionLabel = `V${index + 1}`;
@@ -1468,7 +1475,7 @@ function createMockVersionSet(taskId: string, pages: Page[], variantSeed = 0): P
     const promptNote = `${fixture.label} · ${fixture.summary}`;
     const pageModelsByPageId = Object.fromEntries(
       pages
-        .map((page, pageIndex) => [page.id, buildMockPageModel(page, versionLabel, variantSeed + index + pageIndex, index)] as const)
+        .map((page, pageIndex) => [page.id, buildMockPageModel(page, versionLabel, variantSeed + index + pageIndex, index, providedPageSourceSets.get(page.id))] as const)
         .filter((entry): entry is readonly [string, PageModel] => Boolean(entry[1])),
     );
     return {
@@ -1478,7 +1485,7 @@ function createMockVersionSet(taskId: string, pages: Page[], variantSeed = 0): P
       promptNote,
       variantSummary: getMockVersionStrategySummary(index),
       derivedFromVersionId: null,
-      previewsByPageId: buildSchemePreviewMap(pages, versionLabel, promptNote, variantSeed + index, index),
+      previewsByPageId: buildSchemePreviewMap(pages, versionLabel, promptNote, variantSeed + index, index, providedPageSourceSets),
       pageModelsByPageId,
       isSelected: index === 0,
       isApproved: false,
@@ -1487,8 +1494,8 @@ function createMockVersionSet(taskId: string, pages: Page[], variantSeed = 0): P
   });
 }
 
-export function createInitialPageVersions(taskId: string, pages: Page[]): PageVersion[] {
-  return createMockVersionSet(taskId, pages, 0);
+export function createInitialPageVersions(taskId: string, pages: Page[], providedPageSourceSets: Map<string, PageSourceSet> = new Map()): PageVersion[] {
+  return createMockVersionSet(taskId, pages, 0, providedPageSourceSets);
 }
 
 export function createDeferredPackagingPages(taskId: string, startIndex: number): Page[] {
