@@ -92,7 +92,7 @@ function getPreferredTextValues(
 }
 
 function buildOverviewBaseTexts(page: Page, pageSourceSet?: PageSourceSet | null) {
-  const combined = getPreferredTextValues(page, pageSourceSet, ["outlineText", "styleText", "userConstraints"]);
+  const combined = getPreferredTextValues(page, pageSourceSet, ["overviewGeneratedDraft", "outlineText", "styleText", "userConstraints"]);
 
   return {
     primary: combined[0] || "本页需要先完成主题进入和总体判断。",
@@ -102,7 +102,7 @@ function buildOverviewBaseTexts(page: Page, pageSourceSet?: PageSourceSet | null
 }
 
 function buildSummaryBaseTexts(page: Page, pageSourceSet?: PageSourceSet | null) {
-  const combined = getPreferredTextValues(page, pageSourceSet, ["outlineText", "userConstraints", "styleText"]);
+  const combined = getPreferredTextValues(page, pageSourceSet, ["summaryGeneratedDraft", "outlineText", "userConstraints", "styleText"]);
 
   return {
     primary: combined[0] || "本页需要把整期内容收束成最终判断，而不是继续展开。",

@@ -1,4 +1,6 @@
 import type { Page } from "@/types/domain";
+import { createOverviewGeneratedDraftFragments } from "@/lib/overviewRealisticDraft";
+import { createSummaryGeneratedDraftFragments } from "@/lib/summaryRealisticDraft";
 import type { ChartBriefSource, ImageSourceAsset, PageSourceSet, TextSourceFragment } from "@/types/pageModel";
 
 function clampText(value: string, limit: number, fallback = "") {
@@ -41,7 +43,9 @@ export function createPageSourceSet(page: Page): PageSourceSet {
     })
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
 
-  const textFragments = [...explicitTextFragments];
+  const overviewGeneratedDraftFragments = createOverviewGeneratedDraftFragments(page);
+  const summaryGeneratedDraftFragments = createSummaryGeneratedDraftFragments(page);
+  const textFragments = [...explicitTextFragments, ...overviewGeneratedDraftFragments, ...summaryGeneratedDraftFragments];
   syntheticTextFragments.forEach((item) => {
     if (!textFragments.some((existing) => existing.text === item.text)) {
       textFragments.push(item);

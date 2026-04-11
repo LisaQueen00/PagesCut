@@ -29,6 +29,17 @@ function createBlockId(prefix: string, index: number) {
   return `${prefix}-${index + 1}`;
 }
 
+function clampLines(lines: number): CSSProperties {
+  return {
+    display: "-webkit-box",
+    WebkitBoxOrient: "vertical",
+    WebkitLineClamp: lines,
+    overflow: "hidden",
+    overflowWrap: "anywhere",
+    minWidth: 0,
+  };
+}
+
 function buildOverviewTheme(seed: number) {
   const palettes = [
     { accent: "#0f172a", soft: "#f5f7fb", border: "#dbe3ef", ink: "#111827" },
@@ -843,8 +854,8 @@ function HeroBlock({
       }}
     >
       <div style={{ fontSize: isCompact ? 10 : 11, letterSpacing: "0.18em", textTransform: "uppercase", color: "#6b7280" }}>{block.eyebrow}</div>
-      <h1 style={{ margin: "12px 0 0", fontSize: isCompact ? 28 : 32, lineHeight: isCompact ? 1.15 : 1.2, fontWeight: 700, color: theme.accent, overflowWrap: "anywhere" }}>{block.title}</h1>
-      <p style={{ margin: "14px 0 0", fontSize: isCompact ? 15 : 16, lineHeight: isCompact ? 1.72 : 1.9, color: theme.ink, overflowWrap: "anywhere" }}>{block.summary}</p>
+      <h1 style={{ margin: "12px 0 0", fontSize: isCompact ? 28 : 32, lineHeight: isCompact ? 1.15 : 1.2, fontWeight: 700, color: theme.accent, ...clampLines(2) }}>{block.title}</h1>
+      <p style={{ margin: "14px 0 0", fontSize: isCompact ? 15 : 16, lineHeight: isCompact ? 1.72 : 1.9, color: theme.ink, ...clampLines(isCompact ? 3 : 4) }}>{block.summary}</p>
     </section>
   );
 }
@@ -903,9 +914,9 @@ function MetricsBlock({
               gap: isCompact ? 4 : 8,
             }}
           >
-            <div style={{ fontSize: isCompact ? 10 : 11, letterSpacing: "0.14em", textTransform: "uppercase", color: "#6b7280", overflowWrap: "anywhere" }}>{item.label}</div>
-            <div style={{ fontSize: isCompact ? 15 : 18, fontWeight: 700, color: theme.accent, overflowWrap: "anywhere" }}>{item.value}</div>
-            <p style={{ margin: 0, fontSize: isCompact ? 11 : 13, lineHeight: isCompact ? 1.45 : 1.7, color: "#4b5563", overflowWrap: "anywhere" }}>{item.detail}</p>
+            <div style={{ fontSize: isCompact ? 10 : 11, letterSpacing: "0.14em", textTransform: "uppercase", color: "#6b7280", ...clampLines(1) }}>{item.label}</div>
+            <div style={{ fontSize: isCompact ? 15 : 18, fontWeight: 700, color: theme.accent, ...clampLines(1) }}>{item.value}</div>
+            <p style={{ margin: 0, fontSize: isCompact ? 11 : 13, lineHeight: isCompact ? 1.45 : 1.7, color: "#4b5563", ...clampLines(isCompact ? 2 : 3) }}>{item.detail}</p>
           </div>
         ))}
       </div>
@@ -943,7 +954,7 @@ function RichTextBlock({
       <div style={{ fontSize: isCompact ? 10 : 11, letterSpacing: "0.18em", textTransform: "uppercase", color: "#6b7280" }}>{block.title}</div>
       <div style={{ display: "grid", gap: isCompact ? 8 : 12, marginTop: isCompact ? 10 : 14, minHeight: 0, height: "100%" }}>
         {block.paragraphs.map((paragraph, index) => (
-          <p key={createBlockId(block.id, index)} style={{ margin: 0, fontSize: isCompact ? 14 : 15, lineHeight: isCompact ? 1.75 : 1.9, color: "#374151", overflowWrap: "anywhere" }}>
+          <p key={createBlockId(block.id, index)} style={{ margin: 0, fontSize: isCompact ? 14 : 15, lineHeight: isCompact ? 1.75 : 1.9, color: "#374151", ...clampLines(isCompact ? 3 : 4) }}>
             {paragraph}
           </p>
         ))}
@@ -986,7 +997,7 @@ function BulletListBlock({
             <span style={{ display: "inline-flex", width: isCompact ? 16 : 18, height: isCompact ? 16 : 18, alignItems: "center", justifyContent: "center", borderRadius: 999, background: "white", color: theme.accent, fontSize: isCompact ? 10 : 11, fontWeight: 700 }}>
               {index + 1}
             </span>
-            <span style={{ fontSize: isCompact ? 13 : 14, lineHeight: isCompact ? 1.65 : 1.8, color: "#4b5563", overflowWrap: "anywhere" }}>{item}</span>
+            <span style={{ fontSize: isCompact ? 13 : 14, lineHeight: isCompact ? 1.65 : 1.8, color: "#4b5563", ...clampLines(isCompact ? 2 : 3) }}>{item}</span>
           </li>
         ))}
       </ul>
@@ -1010,19 +1021,20 @@ function ChartBlock({
       <div style={{ fontSize: isCompact ? 10 : 11, letterSpacing: "0.18em", textTransform: "uppercase", color: "#6b7280" }}>{block.title}</div>
       <div style={{ marginTop: isCompact ? 14 : 18, display: "flex", alignItems: "end", gap: isCompact ? 10 : 14, minHeight: 0, height: "100%", minWidth: 0, overflow: "hidden" }}>
         {block.series.map((item) => (
-          <div key={item.id} style={{ flex: "1 1 0", minWidth: 0, display: "grid", gap: isCompact ? 8 : 10, justifyItems: "center" }}>
-            <span style={{ fontSize: isCompact ? 11 : 12, color: "#6b7280", overflowWrap: "anywhere" }}>{item.value}</span>
+          <div key={item.id} style={{ flex: "1 1 0", minWidth: 0, minHeight: 0, height: "100%", display: "grid", gridTemplateRows: "auto minmax(0, 1fr) auto", gap: isCompact ? 8 : 10, justifyItems: "center", overflow: "hidden" }}>
+            <span style={{ fontSize: isCompact ? 11 : 12, color: "#6b7280", ...clampLines(1) }}>{item.value}</span>
             <div
               style={{
                 width: "100%",
                 minHeight: 28,
-                height: `${Math.max(28, (item.value / maxValue) * (isCompact ? 136 : 172))}px`,
+                height: `${Math.max(18, (item.value / maxValue) * 100)}%`,
+                maxHeight: "100%",
                 borderRadius: 16,
                 background: theme.accent,
                 opacity: 0.9,
               }}
             />
-            <span style={{ fontSize: isCompact ? 11 : 12, color: "#374151", overflowWrap: "anywhere", textAlign: "center" }}>{item.label}</span>
+            <span style={{ fontSize: isCompact ? 11 : 12, color: "#374151", textAlign: "center", ...clampLines(1) }}>{item.label}</span>
           </div>
         ))}
       </div>
@@ -1046,7 +1058,7 @@ function TableBlock({
       <div style={{ marginTop: isCompact ? 10 : 14, overflow: "hidden", borderRadius: 18, border: `1px solid ${theme.border}`, minHeight: 0 }}>
         <div style={{ display: "grid", gridTemplateColumns: `repeat(${block.data.columns.length}, minmax(0, 1fr))`, background: theme.soft }}>
           {block.data.columns.map((column, index) => (
-            <div key={createBlockId(block.id, index)} style={{ minWidth: 0, padding: isCompact ? "10px 12px" : "12px 14px", fontSize: isCompact ? 11 : 12, fontWeight: 600, color: theme.ink, overflowWrap: "anywhere" }}>
+            <div key={createBlockId(block.id, index)} style={{ minWidth: 0, padding: isCompact ? "10px 12px" : "12px 14px", fontSize: isCompact ? 11 : 12, fontWeight: 600, color: theme.ink, ...clampLines(1) }}>
               {column}
             </div>
           ))}
@@ -1054,7 +1066,7 @@ function TableBlock({
         {block.data.rows.map((row, rowIndex) => (
           <div key={createBlockId(`${block.id}-row`, rowIndex)} style={{ display: "grid", gridTemplateColumns: `repeat(${block.data.columns.length}, minmax(0, 1fr))`, borderTop: rowIndex === 0 ? "none" : `1px solid ${theme.border}` }}>
             {row.map((cell, cellIndex) => (
-              <div key={createBlockId(`${block.id}-${rowIndex}`, cellIndex)} style={{ minWidth: 0, padding: isCompact ? "10px 12px" : "12px 14px", fontSize: isCompact ? 11 : 12, lineHeight: isCompact ? 1.5 : 1.6, color: "#374151", overflowWrap: "anywhere" }}>
+              <div key={createBlockId(`${block.id}-${rowIndex}`, cellIndex)} style={{ minWidth: 0, padding: isCompact ? "10px 12px" : "12px 14px", fontSize: isCompact ? 11 : 12, lineHeight: isCompact ? 1.5 : 1.6, color: "#374151", ...clampLines(isCompact ? 1 : 2) }}>
                 {cell}
               </div>
             ))}
@@ -1078,7 +1090,7 @@ function CalloutBlock({
   return (
     <section style={{ width: "100%", minWidth: 0, height: "100%", minHeight: 0, borderRadius: 24, background: `linear-gradient(145deg, ${theme.soft} 0%, white 100%)`, padding: isCompact ? 16 : 20, border: `1px solid ${theme.border}`, boxSizing: "border-box", overflow: "hidden", display: "grid", gridTemplateRows: "auto minmax(0, 1fr)" }}>
       <div style={{ fontSize: isCompact ? 10 : 11, letterSpacing: "0.18em", textTransform: "uppercase", color: "#6b7280" }}>{block.title}</div>
-      <p style={{ margin: `${isCompact ? 10 : 12}px 0 0`, fontSize: isCompact ? 14 : 15, lineHeight: isCompact ? 1.72 : 1.85, color: theme.ink, overflowWrap: "anywhere" }}>{block.body}</p>
+      <p style={{ margin: `${isCompact ? 10 : 12}px 0 0`, fontSize: isCompact ? 14 : 15, lineHeight: isCompact ? 1.72 : 1.85, color: theme.ink, ...clampLines(isCompact ? 4 : 5) }}>{block.body}</p>
     </section>
   );
 }
@@ -1103,8 +1115,8 @@ function SignalListBlock({
               {index + 1}
             </div>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: isCompact ? 11 : 12, letterSpacing: "0.14em", textTransform: "uppercase", color: "#6b7280", overflowWrap: "anywhere" }}>{item.heading}</div>
-              <p style={{ margin: "7px 0 0", fontSize: isCompact ? 13 : 14, lineHeight: isCompact ? 1.65 : 1.8, color: "#374151", overflowWrap: "anywhere" }}>{item.detail}</p>
+              <div style={{ fontSize: isCompact ? 11 : 12, letterSpacing: "0.14em", textTransform: "uppercase", color: "#6b7280", ...clampLines(1) }}>{item.heading}</div>
+              <p style={{ margin: "7px 0 0", fontSize: isCompact ? 13 : 14, lineHeight: isCompact ? 1.65 : 1.8, color: "#374151", ...clampLines(isCompact ? 2 : 3) }}>{item.detail}</p>
             </div>
           </div>
         ))}
@@ -1149,7 +1161,8 @@ function VisualBlock({
         style={{
           borderRadius: 20,
           background: `linear-gradient(135deg, ${theme.accent} 0%, rgba(255,255,255,0.96) 100%)`,
-          minHeight: isCompact ? 136 : 164,
+          minHeight: 0,
+          height: "100%",
           position: "relative",
           overflow: "hidden",
         }}
@@ -1175,7 +1188,7 @@ function VisualBlock({
           }}
         />
       </div>
-      <p style={{ margin: 0, fontSize: isCompact ? 13 : 14, lineHeight: isCompact ? 1.68 : 1.8, color: theme.ink, overflowWrap: "anywhere" }}>{block.caption}</p>
+      <p style={{ margin: 0, fontSize: isCompact ? 13 : 14, lineHeight: isCompact ? 1.68 : 1.8, color: theme.ink, ...clampLines(isCompact ? 2 : 3) }}>{block.caption}</p>
     </section>
   );
 }
@@ -1190,6 +1203,9 @@ function ContentSlotsBlock({
   density: PageRenderDensity;
 }) {
   const isDense = density === "compact" || block.items.length >= 3;
+  const isTextOnly = block.items.every((item) => item.unitType === "text");
+  const textSlotColumns = isTextOnly ? Math.max(1, Math.min(block.items.length, 3)) : 1;
+  const textSlotRows = Math.max(1, isTextOnly ? Math.ceil(block.items.length / textSlotColumns) : block.items.length);
   const getSlotBinding = (item: typeof block.items[number], slotType: "image" | "text" | "chart" | "explanation") =>
     item.slotBindings?.find((binding) => binding.slotType === slotType);
   const formatBoolean = (value: boolean) => (value ? "yes" : "no");
@@ -1232,18 +1248,32 @@ function ContentSlotsBlock({
         border: `1px solid ${theme.border}`,
         boxSizing: "border-box",
         overflow: "hidden",
+        display: "grid",
+        gridTemplateRows: block.summary ? "auto auto minmax(0, 1fr)" : "auto minmax(0, 1fr)",
       }}
     >
       <div style={{ fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", color: "#6b7280" }}>{block.title}</div>
       {block.summary ? (
-        <div style={{ marginTop: 6, fontSize: isDense ? 10 : 11, lineHeight: 1.5, color: "#4b5563" }}>
+        <div style={{ marginTop: 6, fontSize: isDense ? 10 : 11, lineHeight: 1.5, color: "#4b5563", ...clampLines(isDense ? 1 : 2) }}>
           <span style={{ textTransform: "uppercase", letterSpacing: "0.12em", color: theme.accent }}>{block.summary.unitType}</span>
           <span>{` · requested ${block.summary.requestedCount} / resolved ${block.summary.resolvedCount} / filled ${block.summary.filledCount}`}</span>
           <span>{` · partial ${block.summary.partialCount} / unfilled ${block.summary.unfilledCount}`}</span>
           <span>{` · fill rule ${block.summary.fillRule}`}</span>
         </div>
       ) : null}
-      <div style={{ display: "grid", gap: isDense ? 8 : 10, marginTop: 10, minHeight: 0 }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: isTextOnly ? `repeat(${textSlotColumns}, minmax(0, 1fr))` : undefined,
+          gridTemplateRows: `repeat(${textSlotRows}, minmax(0, 1fr))`,
+          gap: isDense ? 8 : 10,
+          marginTop: 10,
+          height: "100%",
+          minHeight: 0,
+          minWidth: 0,
+          overflow: "hidden",
+        }}
+      >
         {block.items.map((item) => {
           if (item.unitType === "text") {
             const textBinding = getSlotBinding(item, "text");
@@ -1255,37 +1285,41 @@ function ContentSlotsBlock({
                   borderRadius: 18,
                   background: theme.soft,
                   padding: isDense ? 8 : 10,
+                  overflow: "hidden",
                 }}
               >
                 <div
                   style={{
                     minWidth: 0,
                     borderRadius: 14,
-                    minHeight: isDense ? 72 : 84,
+                    minHeight: 0,
+                    height: "100%",
                     background: "white",
                     border: `1px dashed ${theme.border}`,
                     padding: isDense ? 8 : 10,
                     boxSizing: "border-box",
-                    display: "grid",
-                    gridTemplateRows: "auto auto auto auto auto",
-                    gap: isDense ? 4 : 5,
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "space-between",
+                    gap: isDense ? 5 : 6,
+                    overflow: "hidden",
                   }}
                 >
-                  <div style={{ fontSize: isDense ? 9 : 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "#6b7280" }}>{item.label}</div>
-                  <div style={{ fontSize: isDense ? 9 : 10, letterSpacing: "0.12em", textTransform: "uppercase", color: theme.accent }}>{item.unitType}</div>
-                  <div style={{ fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: item.outcome === "filled" ? theme.accent : item.outcome === "partial" ? "#b45309" : "#6b7280", overflowWrap: "anywhere" }}>
-                    {`unit outcome · ${formatOutcome(item.outcome)}`}
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: isDense ? 9 : 10, letterSpacing: "0.12em", textTransform: "uppercase", color: theme.accent, ...clampLines(1) }}>{item.unitType}</div>
+                    <div style={{ marginTop: 4, fontSize: isDense ? 10 : 11, lineHeight: isDense ? 1.35 : 1.45, color: "#374151", ...clampLines(2) }}>
+                      {item.label}
+                    </div>
                   </div>
-                  <div style={{ fontSize: isDense ? 10 : 11, lineHeight: isDense ? 1.45 : 1.55, color: "#4b5563", overflowWrap: "anywhere" }}>
-                    {item.textSlotLabel ?? "text slot"}
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: item.outcome === "filled" ? theme.accent : item.outcome === "partial" ? "#b45309" : "#6b7280", ...clampLines(1) }}>
+                      {`outcome · ${formatOutcome(item.outcome)}`}
+                    </div>
+                    <div style={{ marginTop: 4, fontSize: isDense ? 9 : 10, lineHeight: 1.35, color: textBinding?.source ? "#4b5563" : "#b45309", ...clampLines(1) }}>
+                      {textBinding?.source?.label ?? formatMissingReason(textBinding?.missingReason)}
+                    </div>
                   </div>
-                  <div style={{ fontSize: isDense ? 9 : 10, lineHeight: 1.4, color: textBinding?.source ? "#4b5563" : "#b45309", overflowWrap: "anywhere" }}>
-                    {textBinding?.source?.label ?? formatMissingReason(textBinding?.missingReason)}
-                  </div>
-                  <div style={{ fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: "#94a3b8", overflowWrap: "anywhere" }}>
-                    {textBinding?.slotId ?? "missing-slot-id"}
-                  </div>
-                  <div style={{ fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: "#6b7280", overflowWrap: "anywhere" }}>
+                  <div style={{ fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: "#6b7280", borderTop: `1px solid ${theme.border}`, paddingTop: 5, ...clampLines(1) }}>
                     {`required ${formatBoolean(textBinding?.required ?? false)} · bound ${formatBoolean(textBinding?.bound ?? false)} · filled ${formatBoolean(textBinding?.filled ?? false)}`}
                   </div>
                 </div>
@@ -1306,35 +1340,41 @@ function ContentSlotsBlock({
                     : "minmax(0, 0.92fr) minmax(0, 1.08fr)",
                 gap: isDense ? 8 : 10,
                 minWidth: 0,
+                minHeight: 0,
+                height: "100%",
                 borderRadius: 18,
                 background: theme.soft,
                 padding: isDense ? 8 : 10,
+                overflow: "hidden",
               }}
             >
             <div
               style={{
                 minWidth: 0,
                 borderRadius: 14,
-                minHeight: isDense ? 58 : 72,
+                minHeight: 0,
+                height: "100%",
                 background: "linear-gradient(140deg, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0.65) 100%)",
                 border: `1px dashed ${theme.border}`,
-                display: "grid",
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "center",
                 alignItems: "center",
-                justifyItems: "center",
                 padding: isDense ? 8 : 10,
                 boxSizing: "border-box",
+                overflow: "hidden",
               }}
             >
-              <div style={{ fontSize: isDense ? 9 : 10, letterSpacing: "0.12em", textTransform: "uppercase", color: theme.accent, textAlign: "center" }}>
+              <div style={{ fontSize: isDense ? 9 : 10, letterSpacing: "0.12em", textTransform: "uppercase", color: theme.accent, textAlign: "center", ...clampLines(1) }}>
                 {item.chartSlotLabel ?? item.imageSlotLabel ?? "image slot"}
               </div>
-              <div style={{ marginTop: 6, fontSize: isDense ? 9 : 10, lineHeight: 1.4, color: leftBinding?.source ? "#4b5563" : "#b45309", textAlign: "center", overflowWrap: "anywhere" }}>
+              <div style={{ marginTop: 6, fontSize: isDense ? 9 : 10, lineHeight: 1.4, color: leftBinding?.source ? "#4b5563" : "#b45309", textAlign: "center", ...clampLines(1) }}>
                 {leftBinding?.source?.label ?? formatMissingReason(leftBinding?.missingReason)}
               </div>
-              <div style={{ marginTop: 4, fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: "#94a3b8", textAlign: "center", overflowWrap: "anywhere" }}>
+              <div style={{ marginTop: 4, fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: "#94a3b8", textAlign: "center", ...clampLines(1) }}>
                 {leftBinding?.slotId ?? "missing-slot-id"}
               </div>
-              <div style={{ marginTop: 4, fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: "#6b7280", textAlign: "center" }}>
+              <div style={{ marginTop: 4, fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: "#6b7280", textAlign: "center", ...clampLines(1) }}>
                 {`required ${formatBoolean(leftBinding?.required ?? false)} · bound ${formatBoolean(leftBinding?.bound ?? false)} · filled ${formatBoolean(leftBinding?.filled ?? false)}`}
               </div>
             </div>
@@ -1342,31 +1382,38 @@ function ContentSlotsBlock({
               style={{
                 minWidth: 0,
                 borderRadius: 14,
-                minHeight: isDense ? 58 : 72,
+                minHeight: 0,
+                height: "100%",
                 background: "white",
                 border: `1px dashed ${theme.border}`,
                 padding: isDense ? 8 : 10,
                 boxSizing: "border-box",
-                display: "grid",
-                gridTemplateRows: "auto auto auto auto auto",
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "space-between",
                 gap: isDense ? 4 : 5,
+                overflow: "hidden",
               }}
             >
-              <div style={{ fontSize: isDense ? 9 : 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "#6b7280" }}>{item.label}</div>
-              <div style={{ fontSize: isDense ? 9 : 10, letterSpacing: "0.12em", textTransform: "uppercase", color: theme.accent }}>{item.unitType}</div>
-              <div style={{ fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: item.outcome === "filled" ? theme.accent : item.outcome === "partial" ? "#b45309" : "#6b7280", overflowWrap: "anywhere" }}>
-                {`unit outcome · ${formatOutcome(item.outcome)}`}
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: isDense ? 9 : 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "#6b7280", ...clampLines(1) }}>{item.label}</div>
+                <div style={{ marginTop: 3, fontSize: isDense ? 9 : 10, letterSpacing: "0.12em", textTransform: "uppercase", color: theme.accent, ...clampLines(1) }}>{item.unitType}</div>
               </div>
-              <div style={{ fontSize: isDense ? 10 : 11, lineHeight: isDense ? 1.45 : 1.55, color: "#4b5563", overflowWrap: "anywhere" }}>
-                {item.explanationSlotLabel ?? item.textSlotLabel ?? "text slot"}
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: item.outcome === "filled" ? theme.accent : item.outcome === "partial" ? "#b45309" : "#6b7280", ...clampLines(1) }}>
+                  {`unit outcome · ${formatOutcome(item.outcome)}`}
+                </div>
+                <div style={{ marginTop: 3, fontSize: isDense ? 10 : 11, lineHeight: isDense ? 1.45 : 1.55, color: "#4b5563", ...clampLines(1) }}>
+                  {item.explanationSlotLabel ?? item.textSlotLabel ?? "text slot"}
+                </div>
               </div>
-              <div style={{ fontSize: isDense ? 9 : 10, lineHeight: 1.4, color: rightBinding?.source ? "#4b5563" : "#b45309", overflowWrap: "anywhere" }}>
+              <div style={{ fontSize: isDense ? 9 : 10, lineHeight: 1.4, color: rightBinding?.source ? "#4b5563" : "#b45309", ...clampLines(1) }}>
                 {rightBinding?.source?.label ?? formatMissingReason(rightBinding?.missingReason)}
               </div>
-              <div style={{ fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: "#94a3b8", overflowWrap: "anywhere" }}>
+              <div style={{ fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: "#94a3b8", ...clampLines(1) }}>
                 {rightBinding?.slotId ?? "missing-slot-id"}
               </div>
-              <div style={{ fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: "#6b7280", overflowWrap: "anywhere" }}>
+              <div style={{ fontSize: isDense ? 8 : 9, lineHeight: 1.35, color: "#6b7280", ...clampLines(1) }}>
                 {`required ${formatBoolean(rightBinding?.required ?? false)} · bound ${formatBoolean(rightBinding?.bound ?? false)} · filled ${formatBoolean(rightBinding?.filled ?? false)}`}
               </div>
             </div>
@@ -1801,12 +1848,15 @@ export function PageModelPreview({
         maxWidth,
         height: previewHeight,
         position: "relative",
+        overflow: "hidden",
       }}
     >
       <div
         style={{
           width: PAGE_MODEL_BASE_WIDTH,
           height: PAGE_MODEL_BASE_HEIGHT,
+          position: "absolute",
+          inset: 0,
           transform: `scale(${scale})`,
           transformOrigin: "top left",
         }}

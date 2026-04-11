@@ -72,7 +72,7 @@ export interface TextSourceFragment {
   text: string;
   label: string;
   sourceBlockId?: string;
-  sourceField?: "outlineText" | "styleText" | "userConstraints";
+  sourceField?: "outlineText" | "styleText" | "userConstraints" | "overviewGeneratedDraft" | "summaryGeneratedDraft";
 }
 
 export interface PageSourceSet {
