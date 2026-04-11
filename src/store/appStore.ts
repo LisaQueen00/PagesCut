@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { createPageSourceSet } from "@/lib/pageSources";
+import { createOverviewOllamaTextFragments, createPageSourceSet } from "@/lib/pageSources";
 import { createSourceAlignmentSnapshot, hydrateHardEditEditableElementAlignment } from "@/lib/hardEditAlignment";
 import { renderPackagingFormalToHtml } from "@/lib/packagingFormal";
 import { renderPageModelToHtml } from "@/lib/pageModel";
@@ -18,7 +18,7 @@ import {
   getMockVersionStrategySummary,
 } from "@/mocks/data";
 import { services } from "@/services";
-import type { PageModel } from "@/types/pageModel";
+import type { PageModel, PageSourceSet } from "@/types/pageModel";
 import type {
   Asset,
   EditedCompositionPageResult,
@@ -83,7 +83,7 @@ interface AppState {
   removeUserProvidedBlock: (pageId: string, blockId: string) => void;
   selectTaskVersion: (taskId: string, versionId: string) => void;
   approveTaskVersion: (taskId: string, versionId: string) => void;
-  regenerateTaskVersion: (taskId: string, pageId: string, promptNote: string) => void;
+  regenerateTaskVersion: (taskId: string, pageId: string, promptNote: string) => Promise<void>;
 }
 
 function replaceById<T extends { id: string }>(items: T[], next: T) {
@@ -421,13 +421,17 @@ function createMockGeneratedVersion(
   existingVersions: PageVersion[],
   selectedVersion: PageVersion | undefined,
   promptNote: string,
+  generatedPageSourceSets: Map<string, PageSourceSet> = new Map(),
+  generationSummary?: string,
 ): PageVersion {
   const versionNumber = getNextVersionNumber(existingVersions);
   const versionLabel = `V${versionNumber}`;
   const variant = versionNumber - 1 + existingVersions.length;
   const promptText = promptNote.trim() || "基于当前版本再生成";
   const family = selectedVersion ? getVersionFamilyFromLabel(selectedVersion.versionLabel) : 0;
-  const variantSummary = `延续${getMockVersionStrategySummary(family)}，并调整：${promptText.length > 18 ? `${promptText.slice(0, 18)}...` : promptText}`;
+  const variantSummary = generationSummary
+    ? `${generationSummary}，并调整：${promptText.length > 18 ? `${promptText.slice(0, 18)}...` : promptText}`
+    : `延续${getMockVersionStrategySummary(family)}，并调整：${promptText.length > 18 ? `${promptText.slice(0, 18)}...` : promptText}`;
   const previewsByPageId = Object.fromEntries(
     pages.map((page, index) => [
       page.id,
@@ -437,12 +441,13 @@ function createMockGeneratedVersion(
         page.id === focusPage.id ? promptText : `${getMockVersionStrategySummary(family)} · ${page.pageType}`,
         variant + index,
         family,
+        generatedPageSourceSets.get(page.id),
       ),
     ]),
   );
   const pageModelsByPageId = Object.fromEntries(
     pages
-      .map((page, index) => [page.id, buildMockPageModel(page, versionLabel, variant + index, family)] as const)
+      .map((page, index) => [page.id, buildMockPageModel(page, versionLabel, variant + index, family, generatedPageSourceSets.get(page.id))] as const)
       .filter((entry): entry is readonly [string, NonNullable<ReturnType<typeof buildMockPageModel>>] => Boolean(entry[1])),
   );
 
@@ -459,6 +464,23 @@ function createMockGeneratedVersion(
     isApproved: false,
     createdAt: new Date().toISOString(),
   };
+}
+
+async function createOverviewModelGeneratedSourceSet(page: Page, promptNote: string) {
+  if (page.pageRole !== "overview") {
+    return null;
+  }
+
+  const draft = await services.generationProvider.generateOverviewDraft(
+    {
+      page,
+      promptNote,
+    },
+    { stage: "page-generation" },
+  );
+
+  const fragments = createOverviewOllamaTextFragments(page, draft);
+  return createPageSourceSet(page, { generatedTextFragments: fragments });
 }
 
 function appendPackagingPreviewsToVersions(versions: PageVersion[], packagingPages: Page[], contentPages: Page[]) {
@@ -2196,12 +2218,27 @@ export const useAppStore = create<AppState>()(
           };
         });
       },
-      regenerateTaskVersion: (taskId, pageId, promptNote) => {
-        set((state) => {
-          if (!promptNote.trim()) {
-            return state;
-          }
+      regenerateTaskVersion: async (taskId, pageId, promptNote) => {
+        const trimmedPrompt = promptNote.trim();
+        if (!trimmedPrompt) {
+          return;
+        }
 
+        const snapshot = get();
+        const focusPage = snapshot.pages.find((item) => item.id === pageId && item.taskId === taskId);
+        let overviewModelSourceSet: PageSourceSet | null = null;
+        let generationSummary: string | undefined;
+        if (focusPage?.pageRole === "overview") {
+          try {
+            overviewModelSourceSet = await createOverviewModelGeneratedSourceSet(focusPage, trimmedPrompt);
+            generationSummary = `本地 ${services.generationProviderConfig.model} 生成 overview 草稿`;
+          } catch (error) {
+            console.warn("Overview local model generation failed; falling back to offline draft.", error);
+            generationSummary = "本地模型不可用，回退离线 overview 草稿";
+          }
+        }
+
+        set((state) => {
           const focusPage = state.pages.find((item) => item.id === pageId && item.taskId === taskId);
           if (!focusPage) {
             return state;
@@ -2210,7 +2247,20 @@ export const useAppStore = create<AppState>()(
           const taskPages = state.pages.filter((page) => page.taskId === taskId).sort((a, b) => a.index - b.index);
           const taskVersions = state.pageVersions.filter((version) => version.taskId === taskId);
           const selectedVersion = taskVersions.find((version) => version.isSelected);
-          const nextVersion = createMockGeneratedVersion(taskId, taskPages, focusPage, taskVersions, selectedVersion, promptNote);
+          const generatedPageSourceSets = new Map<string, PageSourceSet>();
+          if (overviewModelSourceSet) {
+            generatedPageSourceSets.set(focusPage.id, overviewModelSourceSet);
+          }
+          const nextVersion = createMockGeneratedVersion(
+            taskId,
+            taskPages,
+            focusPage,
+            taskVersions,
+            selectedVersion,
+            trimmedPrompt,
+            generatedPageSourceSets,
+            generationSummary,
+          );
           if (!isValidTaskVersion(nextVersion, taskPages)) {
             return state;
           }

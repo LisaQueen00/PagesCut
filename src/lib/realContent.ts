@@ -71,10 +71,10 @@ function getPreferredTextValues(
 ) {
   const sourceTexts = pageSourceSet
     ? [
-        ...pageSourceSet.textFragments.filter((item) => item.origin === "user-block"),
         ...preferredSyntheticOrder.flatMap((field) =>
           pageSourceSet.textFragments.filter((item) => item.origin === "synthetic" && item.sourceField === field),
         ),
+        ...pageSourceSet.textFragments.filter((item) => item.origin === "user-block"),
       ]
         .map((item) => item.text.trim())
         .filter(Boolean)
@@ -92,7 +92,7 @@ function getPreferredTextValues(
 }
 
 function buildOverviewBaseTexts(page: Page, pageSourceSet?: PageSourceSet | null) {
-  const combined = getPreferredTextValues(page, pageSourceSet, ["overviewGeneratedDraft", "outlineText", "styleText", "userConstraints"]);
+  const combined = getPreferredTextValues(page, pageSourceSet, ["overviewOllamaDraft", "overviewGeneratedDraft", "outlineText", "styleText", "userConstraints"]);
 
   return {
     primary: combined[0] || "本页需要先完成主题进入和总体判断。",

@@ -1,7 +1,7 @@
 import { createGeneratedCaseContract, createGeneratedOverviewContract, createGeneratedSummaryContract, createManualDataContract, createPageContentPlan, createPageIntent, fillContractToPageModel, renderPageModelToHtml } from "@/lib/pageModel";
 import { createPageSourceSet } from "@/lib/pageSources";
 import type { Asset, Page, PageVersion, Project, Task, WorkType } from "@/types/domain";
-import type { PageIntent, PageModel } from "@/types/pageModel";
+import type { PageIntent, PageModel, PageSourceSet } from "@/types/pageModel";
 
 interface SeedTaskResult {
   project: Project;
@@ -475,12 +475,18 @@ function applyIntentFixtureOverrides(page: Page, pageIntent: PageIntent, family 
   return pageIntent;
 }
 
-export function buildMockPageModel(page: Page, versionLabel: string, variant = 0, _familyOverride?: number): PageModel | null {
+export function buildMockPageModel(
+  page: Page,
+  versionLabel: string,
+  variant = 0,
+  _familyOverride?: number,
+  providedPageSourceSet?: PageSourceSet | null,
+): PageModel | null {
   const fixtureFamily = _familyOverride ?? 0;
   const fixturePage = applyMockValidationFixture(page, fixtureFamily);
   const rawPageIntent = createPageIntent(fixturePage);
   const pageIntent = rawPageIntent ? applyIntentFixtureOverrides(fixturePage, rawPageIntent, fixtureFamily) : null;
-  const pageSourceSet = pageIntent ? createPageSourceSet(fixturePage) : null;
+  const pageSourceSet = pageIntent ? providedPageSourceSet ?? createPageSourceSet(fixturePage) : null;
   const contentPlan = pageIntent ? createPageContentPlan(fixturePage, pageIntent, pageSourceSet) : null;
   const overviewContract = createGeneratedOverviewContract(fixturePage, versionLabel, pageIntent, contentPlan, pageSourceSet);
   if (overviewContract) {
@@ -1357,8 +1363,15 @@ function renderContentPreviewLayout(params: {
   });
 }
 
-export function buildMockPreviewHtml(page: Page, versionLabel: string, _promptNote: string, variant = 0, familyOverride?: number) {
-  const pageModel = buildMockPageModel(page, versionLabel, variant, familyOverride);
+export function buildMockPreviewHtml(
+  page: Page,
+  versionLabel: string,
+  _promptNote: string,
+  variant = 0,
+  familyOverride?: number,
+  providedPageSourceSet?: PageSourceSet | null,
+) {
+  const pageModel = buildMockPageModel(page, versionLabel, variant, familyOverride, providedPageSourceSet);
   if (pageModel) {
     return renderPageModelToHtml(pageModel);
   }

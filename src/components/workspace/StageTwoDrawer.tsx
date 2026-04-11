@@ -28,7 +28,7 @@ export function StageTwoDrawer({
   onToggle: () => void;
   onSelectVersion: (versionId: string) => void;
   onApproveVersion: (versionId: string) => void;
-  onRegenerate: (promptNote: string) => void;
+  onRegenerate: (promptNote: string) => void | Promise<void>;
   onEnterPackaging: () => void;
   canEnterPackaging: boolean;
 }) {

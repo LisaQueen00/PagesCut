@@ -2,13 +2,30 @@ import type { Page } from "@/types/domain";
 import { createOverviewGeneratedDraftFragments } from "@/lib/overviewRealisticDraft";
 import { createSummaryGeneratedDraftFragments } from "@/lib/summaryRealisticDraft";
 import type { ChartBriefSource, ImageSourceAsset, PageSourceSet, TextSourceFragment } from "@/types/pageModel";
+import type { GeneratedTextDraftResult } from "@/services/providers/types";
 
 function clampText(value: string, limit: number, fallback = "") {
   const trimmed = value.trim() || fallback;
   return trimmed.length > limit ? `${trimmed.slice(0, limit)}...` : trimmed;
 }
 
-export function createPageSourceSet(page: Page): PageSourceSet {
+export interface CreatePageSourceSetOptions {
+  generatedTextFragments?: TextSourceFragment[];
+}
+
+export function createOverviewOllamaTextFragments(page: Page, draft: GeneratedTextDraftResult): TextSourceFragment[] {
+  return draft.fragments.map((fragment, index) => ({
+    id: `${page.id}-overview-ollama-draft-${index + 1}`,
+    pageId: page.id,
+    origin: "synthetic",
+    sourceField: "overviewOllamaDraft",
+    sourceBlockId: draft.sourceId,
+    label: clampText(fragment.label, 26, `ollama ${draft.model} draft ${index + 1}`),
+    text: fragment.text,
+  }));
+}
+
+export function createPageSourceSet(page: Page, options: CreatePageSourceSetOptions = {}): PageSourceSet {
   const explicitTextFragments: TextSourceFragment[] = page.userProvidedContentBlocks
     .filter((block): block is Extract<Page["userProvidedContentBlocks"][number], { type: "text" }> => block.type === "text")
     .map((block, index) => ({
@@ -45,7 +62,12 @@ export function createPageSourceSet(page: Page): PageSourceSet {
 
   const overviewGeneratedDraftFragments = createOverviewGeneratedDraftFragments(page);
   const summaryGeneratedDraftFragments = createSummaryGeneratedDraftFragments(page);
-  const textFragments = [...explicitTextFragments, ...overviewGeneratedDraftFragments, ...summaryGeneratedDraftFragments];
+  const textFragments = [
+    ...(options.generatedTextFragments ?? []),
+    ...explicitTextFragments,
+    ...overviewGeneratedDraftFragments,
+    ...summaryGeneratedDraftFragments,
+  ];
   syntheticTextFragments.forEach((item) => {
     if (!textFragments.some((existing) => existing.text === item.text)) {
       textFragments.push(item);
@@ -81,7 +103,9 @@ export function createPageSourceSet(page: Page): PageSourceSet {
     id: `${page.id}-source-set`,
     pageId: page.id,
     sourceVersion: "v1-minimal-pair-and-text-sources",
-    createdFrom: "userProvidedContentBlocks+pageDefinition",
+    createdFrom: options.generatedTextFragments?.length
+      ? "userProvidedContentBlocks+pageDefinition+generatedTextFragments"
+      : "userProvidedContentBlocks+pageDefinition",
     textFragments,
     imageAssets,
     chartBriefs,

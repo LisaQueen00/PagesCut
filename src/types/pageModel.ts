@@ -72,14 +72,20 @@ export interface TextSourceFragment {
   text: string;
   label: string;
   sourceBlockId?: string;
-  sourceField?: "outlineText" | "styleText" | "userConstraints" | "overviewGeneratedDraft" | "summaryGeneratedDraft";
+  sourceField?:
+    | "outlineText"
+    | "styleText"
+    | "userConstraints"
+    | "overviewGeneratedDraft"
+    | "summaryGeneratedDraft"
+    | "overviewOllamaDraft";
 }
 
 export interface PageSourceSet {
   id: string;
   pageId: string;
   sourceVersion: string;
-  createdFrom: "userProvidedContentBlocks+pageDefinition";
+  createdFrom: "userProvidedContentBlocks+pageDefinition" | "userProvidedContentBlocks+pageDefinition+generatedTextFragments";
   textFragments: TextSourceFragment[];
   imageAssets: ImageSourceAsset[];
   chartBriefs: ChartBriefSource[];

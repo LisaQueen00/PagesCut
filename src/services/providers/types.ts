@@ -28,6 +28,52 @@ export interface ProviderContext {
   stage: "outline" | "page-generation";
 }
 
+export type GenerationProviderType = "ollama-local" | "remote-placeholder";
+export type GenerationProviderConfigSource =
+  | "workspace-default"
+  | "environment"
+  | "page-config-placeholder"
+  | "admin-config-placeholder";
+
+export interface GenerationProviderOptions {
+  temperature: number;
+  topP: number;
+  numPredict: number;
+}
+
+export interface GenerationTruthfulnessPolicy {
+  requireGroundedOutput: boolean;
+  allowUngroundedSpecificFacts: boolean;
+  forbiddenSpecificFactKinds: string[];
+}
+
+export interface GenerationProviderConfig {
+  providerType: GenerationProviderType;
+  model: string;
+  endpoint: string;
+  source: GenerationProviderConfigSource;
+  options: GenerationProviderOptions;
+  truthfulnessPolicy: GenerationTruthfulnessPolicy;
+}
+
+export interface OverviewGenerationRequest {
+  page: Page;
+  promptNote: string;
+}
+
+export interface GeneratedTextDraftFragment {
+  label: string;
+  text: string;
+}
+
+export interface GeneratedTextDraftResult {
+  providerType: GenerationProviderType;
+  model: string;
+  sourceId: string;
+  prompt: string;
+  fragments: GeneratedTextDraftFragment[];
+}
+
 export interface OutlineProvider {
   normalizeTaskInput(request: NormalizedTaskRequest, context: ProviderContext): Promise<NormalizedTaskInput>;
   generateInitialOutline(input: NormalizedTaskInput, context: ProviderContext): Promise<OutlineGenerationResult>;
@@ -35,6 +81,10 @@ export interface OutlineProvider {
 
 export interface PageGenerationProvider {
   generateCandidates(request: PageGenerationRequest, context: ProviderContext): Promise<PageVersion[]>;
+}
+
+export interface GenerationProvider {
+  generateOverviewDraft(request: OverviewGenerationRequest, context: ProviderContext): Promise<GeneratedTextDraftResult>;
 }
 
 export interface SearchProvider {
