@@ -14,7 +14,7 @@ import { PackagingPagePreview } from "@/lib/packagingFormal";
 import { PageModelPreview } from "@/lib/pageModel";
 import { getCompositionSourceAlignmentInsight, getCompositionSourceAlignmentSummary, getPagesBySourceAlignmentStatus } from "@/lib/sourceAlignmentSummary";
 import { useAppStore } from "@/store/appStore";
-import type { EditedCompositionPageResult, FinalComposition, FinalCompositionPage, HardEditPageDraft, Page, PageVersion, Task } from "@/types/domain";
+import type { EditedCompositionPageResult, FinalComposition, FinalCompositionPage, HardEditPageDraft, Page, PageGenerationStatus, PageVersion, Task } from "@/types/domain";
 
 const stylePool = [
   "现代杂志感，简洁留白",
@@ -64,6 +64,7 @@ function StageSidebar<T extends Page | FinalCompositionPage>({
   hardEditDraftMap,
   readOnlyPageIds,
   emptyLabels,
+  pageGenerationStatusByPageId,
 }: {
   pages: T[];
   selectedPageId: string;
@@ -73,6 +74,7 @@ function StageSidebar<T extends Page | FinalCompositionPage>({
   hardEditDraftMap?: Map<string, HardEditPageDraft>;
   readOnlyPageIds?: Set<string>;
   emptyLabels?: Partial<Record<"front" | "content" | "rear", string>>;
+  pageGenerationStatusByPageId?: Record<string, PageGenerationStatus>;
 }) {
   const groups = getGroupedPages(pages);
 
@@ -107,6 +109,7 @@ function StageSidebar<T extends Page | FinalCompositionPage>({
                   const isReadOnly = readOnlyPageIds?.has(page.id) ?? false;
                   const cardPage = {
                     pageType: page.pageType,
+                    generationStatus: pageGenerationStatusByPageId?.[page.id],
                     pageKind: page.pageKind,
                     sourceMode: sourcePage && "sourceMode" in sourcePage ? sourcePage.sourceMode : undefined,
                     outlineText: sourcePage && "outlineText" in sourcePage ? sourcePage.outlineText : undefined,
@@ -126,6 +129,8 @@ function StageSidebar<T extends Page | FinalCompositionPage>({
                       ? "case"
                       : sourcePage.pageRole === "feature" && sourcePage.pageType.includes("数据")
                         ? "data"
+                        : sourcePage.pageRole === "feature"
+                          ? "feature"
                         : sourcePage.pageRole === "summary"
                           ? "summary"
                           : sourcePage.pageRole === "overview"
@@ -343,22 +348,70 @@ function StageTwoWorkspace({
     () => currentPageVersions.find((version) => version.isSelected) ?? currentPageVersions[currentPageVersions.length - 1],
     [currentPageVersions],
   );
-  const selectedPreviewHtml = selectedVersion?.previewsByPageId[selectedPage.id] ?? "";
-  const selectedPageModel = selectedVersion?.pageModelsByPageId?.[selectedPage.id];
-  const pageLabel = getPageDisplayLabel(selectedPage, pages);
+  const hasModelCandidate = Boolean(selectedVersion?.variantSummary.includes("模型正文候选"));
+  const effectiveSelectedPage = pages.find((page) => page.id === selectedPage.id) ?? pages[0];
+  const selectedPreviewHtml = effectiveSelectedPage ? selectedVersion?.previewsByPageId[effectiveSelectedPage.id] ?? "" : "";
+  const selectedPageModel = effectiveSelectedPage ? selectedVersion?.pageModelsByPageId?.[effectiveSelectedPage.id] : undefined;
+  const selectedPageGenerationStatus = effectiveSelectedPage ? selectedVersion?.pageGenerationStatusByPageId?.[effectiveSelectedPage.id] : undefined;
+  const pageLabel = effectiveSelectedPage ? getPageDisplayLabel(effectiveSelectedPage, pages) : "-";
   const contentPages = pages;
 
   if (!selectedVersion) {
     return null;
   }
 
+  if (!effectiveSelectedPage) {
+    return (
+      <div className="grid flex-1 gap-4 xl:grid-cols-[280px_minmax(0,1fr)_340px]">
+        <StageSidebar
+          pages={[]}
+          selectedPageId=""
+          onSelect={(pageId) => setTaskSelectedPage(task.id, pageId)}
+          helperText="当前任务还没有可展示的内容页结构。"
+        />
+
+        <section className="flex min-h-[520px] items-center justify-center rounded-[28px] border border-line/70 bg-white p-8 shadow-panel">
+          <div className="max-w-md text-center">
+            <p className="text-xs uppercase tracking-[0.24em] text-muted">Model Candidate View</p>
+            <h2 className="mt-3 text-2xl font-semibold text-ink">暂无可展示的内容页</h2>
+            <p className="mt-3 text-sm leading-7 text-muted">
+              当前版本没有可选中的内容页。请先回到大纲阶段确认页级结构，再进入候选页生成。
+            </p>
+          </div>
+        </section>
+
+        <StageTwoDrawer
+          open={drawerOpen}
+          task={task}
+          page={selectedPage}
+          pageLabel="-"
+          contentPages={contentPages}
+          versions={currentPageVersions}
+          selectedVersionId={selectedVersion.id}
+          selectedPageGenerationStatus={selectedPageGenerationStatus}
+          onToggle={() => setDrawerOpen((current) => !current)}
+          onSelectVersion={(versionId) => selectTaskVersion(task.id, versionId)}
+          onApproveVersion={(versionId) => approveTaskVersion(task.id, versionId)}
+          onRegenerate={(promptNote) => regenerateTaskVersion(task.id, selectedPage.id, promptNote)}
+          onEnterPackaging={() => enterPackagingStage(task.id)}
+          canEnterPackaging={canAdvance}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="grid flex-1 gap-4 xl:grid-cols-[280px_minmax(0,1fr)_340px]">
       <StageSidebar
         pages={pages}
-        selectedPageId={selectedPage.id}
+        selectedPageId={effectiveSelectedPage.id}
         onSelect={(pageId) => setTaskSelectedPage(task.id, pageId)}
-        helperText="左侧继续切换页卡；当前整期方案保持不变，不同页面只展示该方案下的页级适配预览。"
+        helperText={
+          hasModelCandidate
+            ? "当前显示完整内容页结构；已接入 provider 的页面会标记为模型生成，未通过模型输出的页面会标记 fallback 或规则骨架。"
+            : "左侧继续切换页卡；当前整期方案保持不变，不同页面只展示该方案下的页级适配预览。"
+        }
+        pageGenerationStatusByPageId={selectedVersion.pageGenerationStatusByPageId}
       />
 
       <CandidatePreview version={selectedVersion} pageModel={selectedPageModel} previewHtml={selectedPreviewHtml} />
@@ -366,15 +419,16 @@ function StageTwoWorkspace({
       <StageTwoDrawer
         open={drawerOpen}
         task={task}
-        page={selectedPage}
+        page={effectiveSelectedPage}
         pageLabel={pageLabel}
         contentPages={contentPages}
         versions={currentPageVersions}
         selectedVersionId={selectedVersion.id}
+        selectedPageGenerationStatus={selectedPageGenerationStatus}
         onToggle={() => setDrawerOpen((current) => !current)}
         onSelectVersion={(versionId) => selectTaskVersion(task.id, versionId)}
         onApproveVersion={(versionId) => approveTaskVersion(task.id, versionId)}
-        onRegenerate={(promptNote) => regenerateTaskVersion(task.id, selectedPage.id, promptNote)}
+        onRegenerate={(promptNote) => regenerateTaskVersion(task.id, effectiveSelectedPage.id, promptNote)}
         onEnterPackaging={() => enterPackagingStage(task.id)}
         canEnterPackaging={canAdvance}
       />

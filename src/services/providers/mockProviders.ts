@@ -27,7 +27,7 @@ export class MockOutlineProvider implements OutlineProvider {
   }
 
   async generateInitialOutline(input: NormalizedTaskInput, _context: ProviderContext): Promise<OutlineGenerationResult> {
-    const seed = createSeedTask(input.prompt, input.taskType);
+    const seed = createSeedTask(input.prompt, input.taskType, { mockPageCount: input.desiredPageCount ?? undefined });
     return delay({
       task: seed.task,
       pages: seed.pages,

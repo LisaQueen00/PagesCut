@@ -1,12 +1,20 @@
 import type { Page } from "@/types/domain";
-import { createOverviewGeneratedDraftFragments } from "@/lib/overviewRealisticDraft";
-import { createSummaryGeneratedDraftFragments } from "@/lib/summaryRealisticDraft";
 import type { ChartBriefSource, ImageSourceAsset, PageSourceSet, TextSourceFragment } from "@/types/pageModel";
 import type { GeneratedTextDraftResult } from "@/services/providers/types";
 
 function clampText(value: string, limit: number, fallback = "") {
   const trimmed = value.trim() || fallback;
   return trimmed.length > limit ? `${trimmed.slice(0, limit)}...` : trimmed;
+}
+
+function createRemoteImageSearchUrl(query: string) {
+  const normalizedQuery = query
+    .replace(/[“”"']/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const safeQuery = normalizedQuery || "editorial magazine visual";
+
+  return `https://source.unsplash.com/1200x800/?${encodeURIComponent(safeQuery)}`;
 }
 
 export interface CreatePageSourceSetOptions {
@@ -34,6 +42,45 @@ export function createSummaryOllamaTextFragments(page: Page, draft: GeneratedTex
     sourceField: "summaryOllamaDraft",
     sourceBlockId: draft.sourceId,
     label: clampText(fragment.label, 26, `ollama ${draft.model} summary ${index + 1}`),
+    sourceRole: fragment.role,
+    text: fragment.text,
+  }));
+}
+
+export function createDataOllamaTextFragments(page: Page, draft: GeneratedTextDraftResult): TextSourceFragment[] {
+  return draft.fragments.map((fragment, index) => ({
+    id: `${page.id}-data-ollama-draft-${index + 1}`,
+    pageId: page.id,
+    origin: "synthetic",
+    sourceField: "dataOllamaDraft",
+    sourceBlockId: draft.sourceId,
+    label: clampText(fragment.label, 26, `ollama ${draft.model} data ${index + 1}`),
+    sourceRole: fragment.role,
+    text: fragment.text,
+  }));
+}
+
+export function createCaseOllamaTextFragments(page: Page, draft: GeneratedTextDraftResult): TextSourceFragment[] {
+  return draft.fragments.map((fragment, index) => ({
+    id: `${page.id}-case-ollama-draft-${index + 1}`,
+    pageId: page.id,
+    origin: "synthetic",
+    sourceField: "caseOllamaDraft",
+    sourceBlockId: draft.sourceId,
+    label: clampText(fragment.label, 26, `ollama ${draft.model} case ${index + 1}`),
+    sourceRole: fragment.role,
+    text: fragment.text,
+  }));
+}
+
+export function createFeatureOllamaTextFragments(page: Page, draft: GeneratedTextDraftResult): TextSourceFragment[] {
+  return draft.fragments.map((fragment, index) => ({
+    id: `${page.id}-feature-ollama-draft-${index + 1}`,
+    pageId: page.id,
+    origin: "synthetic",
+    sourceField: "featureOllamaDraft",
+    sourceBlockId: draft.sourceId,
+    label: clampText(fragment.label, 26, `ollama ${draft.model} feature ${index + 1}`),
     sourceRole: fragment.role,
     text: fragment.text,
   }));
@@ -74,13 +121,9 @@ export function createPageSourceSet(page: Page, options: CreatePageSourceSetOpti
     })
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
 
-  const overviewGeneratedDraftFragments = createOverviewGeneratedDraftFragments(page);
-  const summaryGeneratedDraftFragments = createSummaryGeneratedDraftFragments(page);
   const textFragments = [
     ...(options.generatedTextFragments ?? []),
     ...explicitTextFragments,
-    ...overviewGeneratedDraftFragments,
-    ...summaryGeneratedDraftFragments,
   ];
   syntheticTextFragments.forEach((item) => {
     if (!textFragments.some((existing) => existing.text === item.text)) {
@@ -100,6 +143,19 @@ export function createPageSourceSet(page: Page, options: CreatePageSourceSetOpti
       caption: block.caption,
       label: block.caption || block.altText || `image source ${index + 1}`,
     }));
+  const generatedImageAssets: ImageSourceAsset[] = textFragments
+    .filter((fragment) => fragment.sourceField === "caseOllamaDraft" && fragment.sourceRole === "caseVisualBrief")
+    .map((fragment, index) => ({
+      id: `${page.id}-generated-image-asset-${index + 1}`,
+      pageId: page.id,
+      origin: "synthetic",
+      sourceBlockId: fragment.sourceBlockId,
+      sourceRole: fragment.sourceRole,
+      imageUrl: createRemoteImageSearchUrl(fragment.text),
+      altText: fragment.text,
+      caption: fragment.text,
+      label: clampText(fragment.label, 26, `generated visual intent ${index + 1}`),
+    }));
 
   const chartBriefs: ChartBriefSource[] = page.userProvidedContentBlocks
     .filter((block): block is Extract<Page["userProvidedContentBlocks"][number], { type: "chart_desc" }> => block.type === "chart_desc")
@@ -112,6 +168,18 @@ export function createPageSourceSet(page: Page, options: CreatePageSourceSetOpti
       chartTypeHint: block.chartTypeHint,
       label: clampText(block.description, 26, `chart source ${index + 1}`),
     }));
+  const generatedChartBriefs: ChartBriefSource[] = textFragments
+    .filter((fragment) => fragment.sourceField === "dataOllamaDraft" && fragment.sourceRole === "dataChartBrief")
+    .map((fragment, index) => ({
+      id: `${page.id}-generated-chart-brief-${index + 1}`,
+      pageId: page.id,
+      origin: "synthetic",
+      sourceBlockId: fragment.sourceBlockId,
+      sourceRole: fragment.sourceRole,
+      description: fragment.text,
+      chartTypeHint: "bar",
+      label: clampText(fragment.label, 26, `generated chart brief ${index + 1}`),
+    }));
 
   return {
     id: `${page.id}-source-set`,
@@ -121,8 +189,8 @@ export function createPageSourceSet(page: Page, options: CreatePageSourceSetOpti
       ? "userProvidedContentBlocks+pageDefinition+generatedTextFragments"
       : "userProvidedContentBlocks+pageDefinition",
     textFragments,
-    imageAssets,
-    chartBriefs,
+    imageAssets: [...imageAssets, ...generatedImageAssets],
+    chartBriefs: [...chartBriefs, ...generatedChartBriefs],
   };
 }
 

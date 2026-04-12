@@ -1,6 +1,9 @@
+import type { PageGenerationStatus } from "@/types/domain";
+
 type OutlinePageCardItem = {
   pageType: string;
   debugPageType?: string;
+  generationStatus?: PageGenerationStatus;
   pageKind: "packaging" | "content";
   sourceMode?: "user" | "system";
   outlineText?: string;
@@ -12,6 +15,35 @@ type OutlinePageCardItem = {
 
 function summarize(text: string) {
   return text.length > 16 ? `${text.slice(0, 16)}...` : text;
+}
+
+function getGenerationStatusLabel(status: PageGenerationStatus) {
+  switch (status) {
+    case "model-generated":
+      return "模型生成";
+    case "rule-skeleton":
+      return "规则骨架";
+    case "fallback":
+      return "回退";
+    case "pending":
+      return "生成中";
+    default:
+      return status;
+  }
+}
+
+function getGenerationStatusClassName(status: PageGenerationStatus) {
+  switch (status) {
+    case "model-generated":
+      return "bg-emerald-50 text-emerald-700";
+    case "fallback":
+      return "bg-amber-50 text-amber-700";
+    case "pending":
+      return "bg-blue-50 text-blue-700";
+    case "rule-skeleton":
+    default:
+      return "bg-slate-100 text-slate-600";
+  }
 }
 
 export function OutlinePageCard({
@@ -57,6 +89,11 @@ export function OutlinePageCard({
         {page.debugPageType ? (
           <span className="rounded-full bg-[#eef3ff] px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.12em] text-[#3b5ccc]">
             {page.debugPageType}
+          </span>
+        ) : null}
+        {page.generationStatus ? (
+          <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${getGenerationStatusClassName(page.generationStatus)}`}>
+            {getGenerationStatusLabel(page.generationStatus)}
           </span>
         ) : null}
         <span className="rounded-full bg-[#f3f5f8] px-2.5 py-1 text-[11px] font-medium text-slate-600">

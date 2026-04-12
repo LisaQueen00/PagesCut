@@ -10,6 +10,7 @@ export type PageKind = "packaging" | "content";
 export type PageRole = "cover" | "toc" | "overview" | "case-study" | "feature" | "summary";
 export type PageBucket = "front" | "content" | "rear";
 export type CompositionSourceKind = "content-page" | "packaging-page";
+export type PageGenerationStatus = "pending" | "model-generated" | "rule-skeleton" | "fallback";
 
 export interface PackagingCompositionSource {
   candidateId: string;
@@ -201,6 +202,7 @@ export interface PageVersion {
   derivedFromVersionId: string | null;
   previewsByPageId: Record<string, string>;
   pageModelsByPageId?: Record<string, PageModel>;
+  pageGenerationStatusByPageId?: Record<string, PageGenerationStatus>;
   isSelected: boolean;
   isApproved: boolean;
   createdAt: string;

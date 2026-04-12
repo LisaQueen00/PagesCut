@@ -198,72 +198,72 @@ function getReaderFacingTextByRole(pageSourceSet: PageSourceSet | null | undefin
   return fragment ? normalizeReaderFacingText(fragment.text) : "";
 }
 
+const OVERVIEW_CONTENT_PENDING = "overview 正文尚未获得可用模型输出，请重新生成或检查 provider 配置。";
+const SUMMARY_CONTENT_PENDING = "summary 正文尚未获得可用模型输出，请重新生成或检查 provider 配置。";
+
 function buildOverviewBaseTexts(page: Page, pageSourceSet?: PageSourceSet | null) {
-  const topic = clampText(getNarrativeTopic(page), 30, page.pageType);
-  const combined = getReaderFacingTextValues(page, pageSourceSet, ["overviewOllamaDraft", "overviewGeneratedDraft"], [
-    `围绕“${topic}”，人工智能相关变化正在从单点事件转向连续演进，模型能力、产品落地与组织采用相互牵引。`,
-    "读者最需要关注的是哪些变化已经形成连续信号，哪些仍停留在概念热度和短期讨论中。",
-    "输入信息仍有限时，综述段落保持概括判断，避免把未核验细节写成确定事实。",
+  const isFeature = page.pageRole === "feature";
+  const combined = getReaderFacingTextValues(page, pageSourceSet, isFeature ? ["featureOllamaDraft"] : ["overviewOllamaDraft"], [
+    OVERVIEW_CONTENT_PENDING,
   ]);
+  const roleText = (overviewRole: string, featureRole: string) =>
+    getReaderFacingTextByRole(pageSourceSet, isFeature ? featureRole : overviewRole);
 
   return {
     primary:
-      getReaderFacingTextByRole(pageSourceSet, "overviewHero") ||
+      roleText("overviewHero", "featureHero") ||
       combined[0] ||
-      `围绕“${topic}”，人工智能相关变化正在从单点事件转向连续演进。`,
+      OVERVIEW_CONTENT_PENDING,
     secondary:
-      getReaderFacingTextByRole(pageSourceSet, "overviewThemeChange") ||
+      roleText("overviewThemeChange", "featureAngle") ||
       combined[1] ||
-      "模型能力、产品落地与组织采用相互牵引，读者需要识别哪些变化正在形成连续信号。",
+      OVERVIEW_CONTENT_PENDING,
     tertiary:
-      getReaderFacingTextByRole(pageSourceSet, "overviewObservationFocus") ||
+      roleText("overviewObservationFocus", "featureEvidence") ||
       combined[2] ||
-      "输入信息仍有限时，综述段落保持概括判断，避免把未核验细节写成确定事实。",
+      OVERVIEW_CONTENT_PENDING,
     relationship:
-      getReaderFacingTextByRole(pageSourceSet, "overviewRelationshipJudgment") ||
+      roleText("overviewRelationshipJudgment", "featureDetail") ||
       combined[1] ||
-      "变化之间的关系比单点热点更值得关注。",
+      OVERVIEW_CONTENT_PENDING,
     narrative:
-      getReaderFacingTextByRole(pageSourceSet, "overviewNarrative") ||
+      roleText("overviewNarrative", "featureDetail") ||
       combined[3] ||
-      "能力、产品和组织节奏之间的相互牵引，决定了后续内容需要继续验证哪些信号。",
+      OVERVIEW_CONTENT_PENDING,
     readerValue:
-      getReaderFacingTextByRole(pageSourceSet, "overviewReaderValue") ||
+      roleText("overviewReaderValue", "featureTakeaway") ||
       combined[4] ||
-      "读者更需要识别真实采用信号，而不是被未经核验的具体细节牵引。",
+      OVERVIEW_CONTENT_PENDING,
     all: combined,
   };
 }
 
 function buildSummaryBaseTexts(page: Page, pageSourceSet?: PageSourceSet | null) {
-  const topic = clampText(getNarrativeTopic(page), 30, page.pageType);
-  const combined = getReaderFacingTextValues(page, pageSourceSet, ["summaryOllamaDraft", "summaryGeneratedDraft"], [
-    `围绕“${topic}”，整期内容可以收束为少量可带走的判断。`,
-    "接下来更适合继续观察关键变化和支撑信号，而不是把尚未证明的内容写成定论。",
-    "人工智能趋势仍处在快速扩散和持续验证之间，清楚但克制的判断比强结论更可靠。",
+  const combined = getReaderFacingTextValues(page, pageSourceSet, ["summaryOllamaDraft"], [
+    SUMMARY_CONTENT_PENDING,
   ]);
 
   return {
     primary:
       getReaderFacingTextByRole(pageSourceSet, "summaryFinalJudgment") ||
       combined[0] ||
-      `围绕“${topic}”，整期内容可以收束为少量可带走的判断。`,
+      SUMMARY_CONTENT_PENDING,
     secondary:
       getReaderFacingTextByRole(pageSourceSet, "summaryNextSignals") ||
       combined[1] ||
-      "接下来更适合继续观察关键变化和支撑信号，而不是给出过强结论。",
+      SUMMARY_CONTENT_PENDING,
     tertiary:
       getReaderFacingTextByRole(pageSourceSet, "summaryUncertainty") ||
       combined[2] ||
-      "人工智能趋势仍处在快速扩散和持续验证之间，清楚但克制的判断比强结论更可靠。",
+      SUMMARY_CONTENT_PENDING,
     closing:
       getReaderFacingTextByRole(pageSourceSet, "summaryClosingNote") ||
       combined[3] ||
-      "后续判断需要继续等待真实采用和支撑信号，而不是提前变成强结论。",
+      SUMMARY_CONTENT_PENDING,
     readerTakeaway:
       getReaderFacingTextByRole(pageSourceSet, "summaryReaderTakeaway") ||
       combined[4] ||
-      "更稳妥的带走信息，是把注意力放在持续变化和可验证信号上。",
+      SUMMARY_CONTENT_PENDING,
     all: combined,
   };
 }
@@ -286,9 +286,7 @@ export function generateOverviewContractInput(
     baseTexts.tertiary,
     baseTexts.narrative,
     baseTexts.readerValue,
-    "最值得关注的是模型能力、产品落地和业务采用之间的相互牵引。",
-    "数据和案例会决定这些变化是短期热度，还是已经进入持续验证。",
-    "输入信息有限时，概括判断优先于具体公司、金额和指标断言。",
+    OVERVIEW_CONTENT_PENDING,
   ]);
   const heroSummary = overviewTexts[0] ?? baseTexts.primary;
   const calloutText = baseTexts.secondary;
@@ -359,7 +357,7 @@ export function generateOverviewContractInput(
         id: "overview-metric-3",
         label: "读者价值",
         value: "识别重点",
-        detail: "把注意力放在真实采用信号，而不是未核验细节。",
+        detail: "把注意力放在可靠选择依据，而不是未核验细节。",
       },
     ],
     viewpointCards,
@@ -557,34 +555,29 @@ export function generateDataContractInput(
   const chartBriefs = chartExplanationPairs.map((pair) => getChartBriefByBinding(pageSourceSet, pair.slotBindings)).filter(Boolean) as ChartBriefSource[];
   const explanationValues = chartExplanationPairs.map((pair) => {
     const sourceId = pair.slotBindings.find((binding) => binding.slotType === "explanation")?.source?.sourceId;
-    return getTextBlockValueById(page, sourceId);
+    return getTextSourceFragmentById(pageSourceSet, sourceId)?.text.trim() || getTextBlockValueById(page, sourceId);
   }).filter(Boolean);
+  const dataSummary = getReaderFacingTextByRole(pageSourceSet, "dataSummary");
+  const dataChartExplanation = getReaderFacingTextByRole(pageSourceSet, "dataChartExplanation");
+  const dataTakeaway = getReaderFacingTextByRole(pageSourceSet, "dataTakeaway");
+  const dataSourceNote = getReaderFacingTextByRole(pageSourceSet, "dataSourceNote");
 
   const chartTitle =
     chartBriefs[0]?.description.trim() ||
     "核心指标变化";
   const chartSummary =
+    dataChartExplanation ||
     explanationValues[0] ||
-    "当前图表说明仍由规则生成补位，说明 chart 已成立但 explanation source formalization 还未完全深化。";
+    "data 图表说明尚未获得可用模型输出，请重新生成或检查 provider 配置。";
   const sourceLines = [
-    `图表配对状态：requested ${chartPairUnit?.requestedCount ?? resolvedPairCount} / resolved ${chartPairUnit?.resolvedCount ?? resolvedPairCount} / filled ${chartPairUnit?.filledCount ?? 0}。`,
-    chartPairAssembly?.partialCount
-      ? "当前存在 partial chartExplanationPair，说明图表与说明文本的 source binding 已经开始暴露现实边界。"
-      : "当前 chartExplanationPair 在本页已完成承接，图表与说明文本绑定关系成立。",
-    shouldKeepTable
-      ? "表格继续作为图表之外的结构化数据补充，而不是独立的旁路内容。"
-      : "当前表格区允许降级，页面仍以图表支撑为主。",
+    dataSourceNote || `图表配对状态：requested ${chartPairUnit?.requestedCount ?? resolvedPairCount} / resolved ${chartPairUnit?.resolvedCount ?? resolvedPairCount} / filled ${chartPairUnit?.filledCount ?? 0}。`,
   ];
 
   const dataTakeaways = [
-    `图表说明单元当前承接 ${resolvedPairCount} 组，页面必须把 chart 与 explanation 的关系显式暴露出来。`,
+    dataTakeaway || `图表说明单元当前承接 ${resolvedPairCount} 组，等待模型补充读图判断。`,
     explanationValues[0]
       ? `首组说明文本已来自正式 source binding：${clampText(explanationValues[0], 40, "说明文本已绑定")}`
-      : "当前 explanation source 不足时，页面虽能继续成立，但会显式暴露 source formalization 的缺口。",
-    pageIntent.allowDegrade
-      ? "当前 data 页允许在供给不足时降级承接，但不会把缺失解释偷偷抹平。"
-      : "当前 data 页不允许随意降级，因此 unresolved / partial 状态必须被看见。",
-    "metrics、chart、table、source note 现在都围绕同一条 data contract 组织，而不是各自独立拼装。",
+      : "data explanation 尚未获得可用模型输出，请重新生成或检查 provider 配置。",
   ];
 
   return {
@@ -593,7 +586,7 @@ export function generateDataContractInput(
     pageId: page.id,
     versionLabel,
     title: page.pageType,
-    summary: `${pickFirstMeaningful(page.outlineText, page.pageType)}，本页当前按数据支撑页而不是综述页来组织图表、说明与表格。`,
+    summary: dataSummary || "data 正文尚未获得可用模型输出，请重新生成或检查 provider 配置。",
     metrics: derivedMetrics,
     chartTitle,
     chartSeries: derivedSeries.slice(0, Math.max(1, resolvedPairCount + 2)),
@@ -640,6 +633,10 @@ function buildCaseBaseTexts(page: Page) {
   };
 }
 
+function getTextValueByBinding(page: Page, pageSourceSet: PageSourceSet | null | undefined, sourceId: string | undefined) {
+  return getTextSourceFragmentById(pageSourceSet, sourceId)?.text.trim() || getTextBlockValueById(page, sourceId);
+}
+
 export function generateCaseContractInput(
   page: Page,
   versionLabel: string,
@@ -665,36 +662,42 @@ export function generateCaseContractInput(
   const imageValues = imageTextPairs.map((pair) => getImageAssetByBinding(pageSourceSet, pair.slotBindings)).filter(Boolean) as ImageSourceAsset[];
   const textValues = imageTextPairs.map((pair) => {
     const sourceId = pair.slotBindings.find((binding) => binding.slotType === "text")?.source?.sourceId;
-    return getTextBlockValueById(page, sourceId);
+    return getTextValueByBinding(page, pageSourceSet, sourceId);
   }).filter(Boolean);
   const leadImage = imageValues[0];
+  const caseSubject = getReaderFacingTextByRole(pageSourceSet, "caseSubject");
+  const caseScenario = getReaderFacingTextByRole(pageSourceSet, "caseScenario");
+  const caseChallenge = getReaderFacingTextByRole(pageSourceSet, "caseChallenge");
+  const caseAction = getReaderFacingTextByRole(pageSourceSet, "caseAction");
+  const caseResult = getReaderFacingTextByRole(pageSourceSet, "caseResult");
+  const caseTakeaway = getReaderFacingTextByRole(pageSourceSet, "caseTakeaway");
+  const caseVisualBrief = getReaderFacingTextByRole(pageSourceSet, "caseVisualBrief");
   const subject =
-    clampText(textValues[0] || pickFirstMeaningful(page.outlineText, page.pageType), 40, page.pageType);
+    clampText(caseSubject || textValues[0] || pickFirstMeaningful(page.outlineText, page.pageType), 40, page.pageType);
   const scenario =
+    caseScenario ||
     textValues[0] ||
-    `${pickFirstMeaningful(page.outlineText, page.pageType)}，这一页先交代案例对象、所在场景和为什么值得看。`;
+    "case 正文尚未获得可用模型输出，请重新生成或检查 provider 配置。";
   const challenge =
+    caseChallenge ||
     textValues[1] ||
-    `${pickFirstMeaningful(page.userConstraints, baseTexts.secondary)}，因此案例页不能只罗列素材，而要说明为什么要这样组织做法。`;
+    "case 问题段落尚未获得可用模型输出，请重新生成或检查 provider 配置。";
   const actionSteps = ensureItems(
     [
-      textValues[1] || "先识别案例里最关键的流程问题或组织瓶颈。",
-      textValues[2] || "再把图像线索与文字说明一一配对，保证叙事推进不是跳跃发生。",
-      `最后把结果收束到明确判断：${pickFirstMeaningful(baseTexts.tertiary, "图文结构需要服务结果理解。")}`,
+      caseAction || textValues[1] || "case 行动段落尚未获得可用模型输出，请重新生成或检查 provider 配置。",
     ],
-    ["图文单元不足时，也要保持案例叙事主线不断裂。"],
-    3,
+    [],
+    1,
   );
   const resultSummary =
-    `${pickFirstMeaningful(baseTexts.secondary, "案例页不只是交代过程，更要让读者知道最终结果为什么成立。")}。`;
+    caseResult || `${pickFirstMeaningful(baseTexts.secondary, "case 结果段落尚未获得可用模型输出，请重新生成或检查 provider 配置。")}。`;
   const takeaway =
-    `${pickFirstMeaningful(baseTexts.tertiary, "图文配对必须服务叙事推进，而不是把图和文各自摆上去。")}。`;
+    caseTakeaway || `${pickFirstMeaningful(baseTexts.tertiary, "case takeaway 尚未获得可用模型输出，请重新生成或检查 provider 配置。")}。`;
   const visualCaption =
     leadImage
-      ? `${leadImage.caption || leadImage.altText || "案例主视觉"}，当前主视觉已来自 imageTextPair 的正式 image binding。`
-      : pageIntent.visualPriority === "high"
-        ? `当前页表达倾向为 ${pageIntent.expressionMode}，应明确预留案例视觉区，并至少容纳 ${pairCount} 组图文单元。`
-        : "案例页当前仍需保留一个主视觉入口，用于承接对象、场景和阅读起点。";
+      ? (leadImage.caption || leadImage.altText || "模型生成的图片检索意图")
+      : caseVisualBrief || "case 图片意图尚未获得可用模型输出，请重新生成或检查 provider 配置。";
+  const visualImageUrl = leadImage?.imageUrl;
 
   return {
     sourceKind: "generated",
@@ -709,6 +712,7 @@ export function generateCaseContractInput(
     resultSummary,
     takeaway,
     visualCaption,
+    visualImageUrl,
     imageTextPairs,
     imageTextPairStatus: {
       requestedCount: imageTextUnit?.requestedCount ?? pairCount,

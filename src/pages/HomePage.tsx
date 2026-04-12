@@ -22,7 +22,7 @@ export function HomePage() {
 
   async function handleCreateTask(workType: WorkType, incomingPrompt?: string) {
     const nextPrompt =
-      incomingPrompt?.trim() || prompt.trim() || (workType === "magazine" ? "我想生成一期 4 月 AI 行业月刊" : "我想生成一份 AI 业务汇报 PPT");
+      incomingPrompt?.trim() || prompt.trim() || (workType === "magazine" ? "请生成一期主题待补充的月刊" : "请生成一份主题待补充的报告 / PPT");
     const task = await createTask(nextPrompt, workType);
     setPrompt("");
     navigate(`/workspace/${task.id}`);
@@ -102,13 +102,13 @@ export function HomePage() {
           title="生成月刊"
           description="面向刊物型任务，先建立页级目录，再进入逐页确认的生成工作台。"
           badge="Monthly"
-          onClick={() => void handleCreateTask("magazine", "我想生成一期 4 月生成式 AI 月刊")}
+          onClick={() => void handleCreateTask("magazine", "请生成一期主题待补充的月刊")}
         />
         <QuickActionCard
           title="生成报告 / PPT"
           description="适合汇报型内容，先整理页级结构，再切换到候选页面与导出流程。"
           badge="Report"
-          onClick={() => void handleCreateTask("report", "我想生成一份 AI 行业季度报告 PPT")}
+          onClick={() => void handleCreateTask("report", "请生成一份主题待补充的报告 / PPT")}
         />
         <QuickActionCard
           title="从素材开始"

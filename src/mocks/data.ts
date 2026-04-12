@@ -1,6 +1,6 @@
 import { createGeneratedCaseContract, createGeneratedOverviewContract, createGeneratedSummaryContract, createManualDataContract, createPageContentPlan, createPageIntent, fillContractToPageModel, renderPageModelToHtml } from "@/lib/pageModel";
 import { createPageSourceSet } from "@/lib/pageSources";
-import type { Asset, Page, PageVersion, Project, Task, WorkType } from "@/types/domain";
+import type { Asset, Page, PageGenerationStatus, PageVersion, Project, Task, WorkType } from "@/types/domain";
 import type { PageIntent, PageModel, PageSourceSet } from "@/types/pageModel";
 
 interface SeedTaskResult {
@@ -112,12 +112,12 @@ const MOCK_INITIAL_PAGE_BLUEPRINTS: MockPageBlueprint[] = [
       {
         id: createId("block"),
         type: "text",
-        text: "案例对象：一个已经将模型能力嵌入实际工作流的团队。",
+        text: "案例对象：一个已经围绕当前主题完成实践尝试的对象。",
       },
       {
         id: createId("block"),
         type: "text",
-        text: "关键做法：先收清流程问题，再把模型能力与人工审核串成稳定路径。",
+        text: "关键做法：先识别当前场景的问题，再把关键动作与人工确认串成稳定路径。",
       },
       {
         id: createId("block"),
@@ -176,6 +176,7 @@ const MOCK_DEFERRED_PAGE_BLUEPRINTS: MockPageBlueprint[] = [
 ];
 
 export const DEFAULT_MOCK_PAGE_COUNT = 4;
+const MAX_MOCK_PAGE_COUNT = 12;
 const INITIAL_MOCK_VERSION_COUNT = 3;
 
 function createId(prefix: string) {
@@ -297,17 +298,43 @@ function buildPromptDrivenCase(prompt: string, workType: WorkType) {
       {
         id: createId("block"),
         type: "text" as const,
-        text: `案例对象：一个围绕 ${topic} 已经把模型能力接入实际工作流的团队。`,
+        text: `案例对象：一个围绕 ${topic} 已经完成实践尝试的对象。`,
       },
       {
         id: createId("block"),
         type: "text" as const,
-        text: `关键动作：先识别 ${topic} 场景里的流程问题，再把模型能力与人工审核串成稳定路径。`,
+        text: `关键动作：先识别 ${topic} 场景里的流程问题，再把关键动作与人工确认串成稳定路径。`,
       },
       {
         id: createId("block"),
         type: "text" as const,
         text: `结果判断：${topic} 相关流程在效率和一致性上都得到提升，因此案例页应把结果和做法明确对应起来。`,
+      },
+    ],
+  };
+}
+
+function buildPromptDrivenFeature(prompt: string, workType: WorkType, featureIndex: number) {
+  const normalizedTopic = prompt
+    .replace(/^(请|帮我|我想|希望|准备|需要)/, "")
+    .replace(/^(生成|做|制作|产出)/, "")
+    .replace(/^(一期|一份|一个)/, "")
+    .trim();
+  const topic = clampText(normalizedTopic || prompt, 24, workType === "magazine" ? "本期主题" : "当前主题");
+  const featureTypes = workType === "magazine" ? ["趋势拆解", "应用观察", "行业影响", "风险观察", "后续展望"] : ["问题拆解", "方案说明", "影响分析", "风险评估", "后续计划"];
+  const featureType = featureTypes[(featureIndex - 1) % featureTypes.length];
+
+  return {
+    pageType: featureType,
+    outlineText: `围绕 ${topic} 展开第 ${featureIndex} 个中段内容页，补充一个区别于数据页和案例页的主题侧面。`,
+    styleText: workType === "magazine" ? "中段内容页应保持专题展开感，避免重复总览和总结。" : "中段内容页应服务汇报主线，清楚补充一个独立侧面。",
+    userConstraints: "该页属于按页数要求补充的内容页，需要承接主题但避免重复 overview / data / case / summary。",
+    expressionMode: "text" as const,
+    userProvidedContentBlocks: [
+      {
+        id: createId("block"),
+        type: "text" as const,
+        text: `补充侧面：${topic} 的第 ${featureIndex} 个中段内容页应展开一个独立观察角度。`,
       },
     ],
   };
@@ -1467,9 +1494,15 @@ function buildSchemePreviewMap(
   );
 }
 
-function createMockVersionSet(taskId: string, pages: Page[], variantSeed = 0, providedPageSourceSets: Map<string, PageSourceSet> = new Map()): PageVersion[] {
+function createMockVersionSet(
+  taskId: string,
+  pages: Page[],
+  variantSeed = 0,
+  providedPageSourceSets: Map<string, PageSourceSet> = new Map(),
+  versionCount = INITIAL_MOCK_VERSION_COUNT,
+): PageVersion[] {
   const now = Date.now();
-  return Array.from({ length: INITIAL_MOCK_VERSION_COUNT }, (_, index) => {
+  return Array.from({ length: versionCount }, (_, index) => {
     const versionLabel = `V${index + 1}`;
     const fixture = MOCK_VALIDATION_FIXTURES[index] ?? MOCK_VALIDATION_FIXTURES[0];
     const promptNote = `${fixture.label} · ${fixture.summary}`;
@@ -1477,6 +1510,12 @@ function createMockVersionSet(taskId: string, pages: Page[], variantSeed = 0, pr
       pages
         .map((page, pageIndex) => [page.id, buildMockPageModel(page, versionLabel, variantSeed + index + pageIndex, index, providedPageSourceSets.get(page.id))] as const)
         .filter((entry): entry is readonly [string, PageModel] => Boolean(entry[1])),
+    );
+    const pageGenerationStatusByPageId = Object.fromEntries(
+      pages.map((page) => [
+        page.id,
+        providedPageSourceSets.has(page.id) ? "model-generated" : "rule-skeleton",
+      ] satisfies [string, PageGenerationStatus]),
     );
     return {
       id: createId("version"),
@@ -1487,6 +1526,7 @@ function createMockVersionSet(taskId: string, pages: Page[], variantSeed = 0, pr
       derivedFromVersionId: null,
       previewsByPageId: buildSchemePreviewMap(pages, versionLabel, promptNote, variantSeed + index, index, providedPageSourceSets),
       pageModelsByPageId,
+      pageGenerationStatusByPageId,
       isSelected: index === 0,
       isApproved: false,
       createdAt: new Date(now + index * 1000).toISOString(),
@@ -1494,8 +1534,13 @@ function createMockVersionSet(taskId: string, pages: Page[], variantSeed = 0, pr
   });
 }
 
-export function createInitialPageVersions(taskId: string, pages: Page[], providedPageSourceSets: Map<string, PageSourceSet> = new Map()): PageVersion[] {
-  return createMockVersionSet(taskId, pages, 0, providedPageSourceSets);
+export function createInitialPageVersions(
+  taskId: string,
+  pages: Page[],
+  providedPageSourceSets: Map<string, PageSourceSet> = new Map(),
+  options: { versionCount?: number } = {},
+): PageVersion[] {
+  return createMockVersionSet(taskId, pages, 0, providedPageSourceSets, options.versionCount ?? INITIAL_MOCK_VERSION_COUNT);
 }
 
 export function createDeferredPackagingPages(taskId: string, startIndex: number): Page[] {
@@ -1526,35 +1571,61 @@ function createMockPages(taskId: string, mockPageCount: number, prompt: string, 
   const dynamicData = buildPromptDrivenData(prompt, workType);
   const dynamicCase = buildPromptDrivenCase(prompt, workType);
   const dynamicSummary = buildPromptDrivenSummary(prompt, workType);
-  return MOCK_INITIAL_PAGE_BLUEPRINTS.slice(0, mockPageCount).map((blueprint, index) => ({
-    id: createId("page"),
-    taskId,
-    index: index + 1,
-    renderSeed: 0,
-    pageKind: blueprint.pageKind,
-    pageRole: blueprint.pageRole,
-    pageType: index === 0 ? dynamicOverview.pageType : index === 1 ? dynamicData.pageType : index === 2 ? dynamicCase.pageType : index === 3 ? dynamicSummary.pageType : blueprint.pageType,
-    outlineText: index === 0 ? dynamicOverview.outlineText : index === 1 ? dynamicData.outlineText : index === 2 ? dynamicCase.outlineText : index === 3 ? dynamicSummary.outlineText : blueprint.outlineText,
-    sourceMode: blueprint.sourceMode,
-    expressionMode: blueprint.expressionMode,
-    styleText: index === 0 ? dynamicOverview.styleText : index === 1 ? dynamicData.styleText : index === 2 ? dynamicCase.styleText : index === 3 ? dynamicSummary.styleText : blueprint.styleText,
-    userConstraints: index === 0 ? dynamicOverview.userConstraints : index === 1 ? dynamicData.userConstraints : index === 2 ? dynamicCase.userConstraints : index === 3 ? dynamicSummary.userConstraints : blueprint.userConstraints,
-    isConfirmed: false,
-    isSaved: index === 0,
-    userProvidedContentBlocks: index === 1 ? dynamicData.userProvidedContentBlocks : index === 2 ? dynamicCase.userProvidedContentBlocks : blueprint.userProvidedContentBlocks,
-    coverMeta: blueprint.coverMeta,
-  }));
+  const middleCount = Math.max(0, mockPageCount - 2);
+  const middleBlueprints = Array.from({ length: middleCount }, (_, index) => {
+    if (index === 0) {
+      return { blueprint: MOCK_INITIAL_PAGE_BLUEPRINTS[1], dynamic: dynamicData };
+    }
+    if (index === 1) {
+      return { blueprint: MOCK_INITIAL_PAGE_BLUEPRINTS[2], dynamic: dynamicCase };
+    }
+
+    return { blueprint: MOCK_INITIAL_PAGE_BLUEPRINTS[1], dynamic: buildPromptDrivenFeature(prompt, workType, index - 1) };
+  });
+  const orderedPages =
+    mockPageCount === 1
+      ? [{ blueprint: MOCK_INITIAL_PAGE_BLUEPRINTS[0], dynamic: dynamicOverview }]
+      : [
+          { blueprint: MOCK_INITIAL_PAGE_BLUEPRINTS[0], dynamic: dynamicOverview },
+          ...middleBlueprints,
+          { blueprint: MOCK_INITIAL_PAGE_BLUEPRINTS[3], dynamic: dynamicSummary },
+        ];
+
+  return orderedPages.map(({ blueprint, dynamic }, index) => {
+    const dynamicPatch = dynamic as Partial<MockPageBlueprint>;
+    const expressionMode = dynamicPatch.expressionMode ?? blueprint.expressionMode;
+    const userProvidedContentBlocks = dynamicPatch.userProvidedContentBlocks ?? blueprint.userProvidedContentBlocks;
+
+    return {
+      id: createId("page"),
+      taskId,
+      index: index + 1,
+      renderSeed: 0,
+      pageKind: blueprint.pageKind,
+      pageRole: blueprint.pageRole,
+      pageType: dynamic.pageType,
+      outlineText: dynamic.outlineText,
+      sourceMode: blueprint.sourceMode,
+      expressionMode,
+      styleText: dynamic.styleText,
+      userConstraints: dynamic.userConstraints,
+      isConfirmed: false,
+      isSaved: index === 0,
+      userProvidedContentBlocks,
+      coverMeta: blueprint.coverMeta,
+    };
+  });
 }
 
 export function createSeedTask(
-  prompt = "我想生成一期 3 月人工智能趋势月刊",
+  prompt = "请生成一期主题待补充的月刊",
   workType: WorkType = "magazine",
   options: MockSeedOptions = {},
 ): SeedTaskResult {
   const projectId = "project-default";
   const taskId = createId("task");
   const now = new Date().toISOString();
-  const mockPageCount = Math.max(1, Math.min(options.mockPageCount ?? DEFAULT_MOCK_PAGE_COUNT, MOCK_INITIAL_PAGE_BLUEPRINTS.length));
+  const mockPageCount = Math.max(1, Math.min(options.mockPageCount ?? DEFAULT_MOCK_PAGE_COUNT, MAX_MOCK_PAGE_COUNT));
   const pages = createMockPages(taskId, mockPageCount, prompt, workType);
 
   const task: Task = {
@@ -1586,7 +1657,7 @@ export function createSeedTask(
       taskId,
       compositionId: "seed-composition-placeholder",
       title: prompt.length > 24 ? `${prompt.slice(0, 24)}...` : prompt,
-      fileName: workType === "magazine" ? "PagesCut_AI_Monthly_March.pdf" : "PagesCut_Project_Report.pptx",
+      fileName: workType === "magazine" ? "PagesCut_Magazine.pdf" : "PagesCut_Project_Report.pptx",
       workType,
       exportFormat: workType === "magazine" ? "pdf" : "pptx",
       pageCount: pages.length,

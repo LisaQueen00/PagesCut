@@ -1,4 +1,4 @@
-import type { Page, PageVersion, Task, WorkType } from "@/types/domain";
+import type { ExpressionMode, Page, PageRole, PageVersion, Task, WorkType } from "@/types/domain";
 
 export interface NormalizedTaskRequest {
   rawPrompt: string;
@@ -66,6 +66,11 @@ export interface SummaryGenerationRequest {
   promptNote: string;
 }
 
+export interface ContentPageGenerationRequest {
+  page: Page;
+  promptNote: string;
+}
+
 export interface GeneratedTextDraftFragment {
   label: string;
   text: string;
@@ -80,6 +85,27 @@ export interface GeneratedTextDraftResult {
   fragments: GeneratedTextDraftFragment[];
 }
 
+export type GeneratedOutlinePageRole = Extract<PageRole, "overview" | "case-study" | "feature" | "summary"> | "data";
+
+export interface GeneratedOutlinePagePlan {
+  title: string;
+  outlineText: string;
+  suggestedPageRole: GeneratedOutlinePageRole;
+  expressionMode: ExpressionMode;
+  styleText: string;
+  userConstraints: string;
+  sourceNeeds?: string;
+  layoutIntent?: string;
+}
+
+export interface GeneratedOutlinePlanResult {
+  providerType: GenerationProviderType;
+  model: string;
+  sourceId: string;
+  prompt: string;
+  pages: GeneratedOutlinePagePlan[];
+}
+
 export interface OutlineProvider {
   normalizeTaskInput(request: NormalizedTaskRequest, context: ProviderContext): Promise<NormalizedTaskInput>;
   generateInitialOutline(input: NormalizedTaskInput, context: ProviderContext): Promise<OutlineGenerationResult>;
@@ -90,8 +116,12 @@ export interface PageGenerationProvider {
 }
 
 export interface GenerationProvider {
+  generateOutlinePlan(input: NormalizedTaskInput, context: ProviderContext): Promise<GeneratedOutlinePlanResult>;
   generateOverviewDraft(request: OverviewGenerationRequest, context: ProviderContext): Promise<GeneratedTextDraftResult>;
   generateSummaryDraft(request: SummaryGenerationRequest, context: ProviderContext): Promise<GeneratedTextDraftResult>;
+  generateDataDraft(request: ContentPageGenerationRequest, context: ProviderContext): Promise<GeneratedTextDraftResult>;
+  generateCaseDraft(request: ContentPageGenerationRequest, context: ProviderContext): Promise<GeneratedTextDraftResult>;
+  generateFeatureDraft(request: ContentPageGenerationRequest, context: ProviderContext): Promise<GeneratedTextDraftResult>;
 }
 
 export interface SearchProvider {

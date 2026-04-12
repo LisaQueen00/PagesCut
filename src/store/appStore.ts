@@ -1,6 +1,13 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { createOverviewOllamaTextFragments, createPageSourceSet, createSummaryOllamaTextFragments } from "@/lib/pageSources";
+import {
+  createCaseOllamaTextFragments,
+  createDataOllamaTextFragments,
+  createFeatureOllamaTextFragments,
+  createOverviewOllamaTextFragments,
+  createPageSourceSet,
+  createSummaryOllamaTextFragments,
+} from "@/lib/pageSources";
 import { createSourceAlignmentSnapshot, hydrateHardEditEditableElementAlignment } from "@/lib/hardEditAlignment";
 import { renderPackagingFormalToHtml } from "@/lib/packagingFormal";
 import { renderPageModelToHtml } from "@/lib/pageModel";
@@ -14,7 +21,6 @@ import {
   buildPackagingPreviewHtml,
   createDeferredPackagingPages,
   createInitialPageVersions,
-  createSeedTask,
   getMockVersionStrategySummary,
 } from "@/mocks/data";
 import { services } from "@/services";
@@ -27,6 +33,7 @@ import type {
   HardEditEditableElement,
   HardEditPageDraft,
   HardEditSourceReference,
+  PageGenerationStatus,
   PackagingPageCandidate,
   PackagingPageFormal,
   Page,
@@ -242,6 +249,10 @@ function normalizePageVersion(version: PageVersion): PageVersion {
       version.previewsByPageId && typeof version.previewsByPageId === "object" ? version.previewsByPageId : {},
     pageModelsByPageId:
       version.pageModelsByPageId && typeof version.pageModelsByPageId === "object" ? version.pageModelsByPageId : {},
+    pageGenerationStatusByPageId:
+      version.pageGenerationStatusByPageId && typeof version.pageGenerationStatusByPageId === "object"
+        ? version.pageGenerationStatusByPageId
+        : {},
   };
 }
 
@@ -450,6 +461,16 @@ function createMockGeneratedVersion(
       .map((page, index) => [page.id, buildMockPageModel(page, versionLabel, variant + index, family, generatedPageSourceSets.get(page.id))] as const)
       .filter((entry): entry is readonly [string, NonNullable<ReturnType<typeof buildMockPageModel>>] => Boolean(entry[1])),
   );
+  const pageGenerationStatusByPageId = Object.fromEntries(
+    pages.map((page) => [
+      page.id,
+      generatedPageSourceSets.has(page.id)
+        ? "model-generated"
+        : page.id === focusPage.id && generationSummary?.includes("fallback")
+          ? "fallback"
+          : "rule-skeleton",
+    ] satisfies [string, PageGenerationStatus]),
+  );
 
   return {
     id: createVersionId(),
@@ -460,6 +481,7 @@ function createMockGeneratedVersion(
     derivedFromVersionId: selectedVersion?.id ?? null,
     previewsByPageId,
     pageModelsByPageId,
+    pageGenerationStatusByPageId,
     isSelected: true,
     isApproved: false,
     createdAt: new Date().toISOString(),
@@ -467,42 +489,79 @@ function createMockGeneratedVersion(
 }
 
 async function createTextPageModelGeneratedSourceSet(page: Page, promptNote: string) {
-  if (page.pageRole !== "overview" && page.pageRole !== "summary") {
+  const isDataPage = page.pageType.includes("数据");
+  const isCasePage = page.pageRole === "case-study" || page.pageType.includes("案例");
+  const isFeaturePage = page.pageRole === "feature" && !isDataPage && !isCasePage;
+  const supported = page.pageRole === "overview" || page.pageRole === "summary" || isDataPage || isCasePage || isFeaturePage;
+  if (!supported) {
     return null;
   }
 
-  const draft =
-    page.pageRole === "summary"
-      ? await services.generationProvider.generateSummaryDraft(
-          {
-            page,
-            promptNote,
-          },
-          { stage: "page-generation" },
-        )
-      : await services.generationProvider.generateOverviewDraft(
-          {
-            page,
-            promptNote,
-          },
-          { stage: "page-generation" },
-        );
+  const draft = page.pageRole === "summary"
+    ? await services.generationProvider.generateSummaryDraft({ page, promptNote }, { stage: "page-generation" })
+    : isDataPage
+      ? await services.generationProvider.generateDataDraft({ page, promptNote }, { stage: "page-generation" })
+      : isCasePage
+        ? await services.generationProvider.generateCaseDraft({ page, promptNote }, { stage: "page-generation" })
+        : isFeaturePage
+          ? await services.generationProvider.generateFeatureDraft({ page, promptNote }, { stage: "page-generation" })
+          : await services.generationProvider.generateOverviewDraft({ page, promptNote }, { stage: "page-generation" });
 
-  const fragments =
-    page.pageRole === "summary"
-      ? createSummaryOllamaTextFragments(page, draft)
-      : createOverviewOllamaTextFragments(page, draft);
+  const fragments = page.pageRole === "summary"
+    ? createSummaryOllamaTextFragments(page, draft)
+    : isDataPage
+      ? createDataOllamaTextFragments(page, draft)
+      : isCasePage
+        ? createCaseOllamaTextFragments(page, draft)
+        : isFeaturePage
+          ? createFeatureOllamaTextFragments(page, draft)
+          : createOverviewOllamaTextFragments(page, draft);
+  const requiredRoles = page.pageRole === "summary"
+    ? ["summaryFinalJudgment", "summaryNextSignals", "summaryUncertainty", "summaryClosingNote", "summaryReaderTakeaway"]
+    : isDataPage
+      ? ["dataSummary", "dataChartBrief", "dataChartExplanation", "dataTakeaway", "dataSourceNote"]
+      : isCasePage
+        ? ["caseSubject", "caseVisualBrief", "caseScenario", "caseChallenge", "caseAction", "caseResult", "caseTakeaway"]
+        : isFeaturePage
+          ? ["featureHero", "featureAngle", "featureDetail", "featureEvidence", "featureTakeaway"]
+          : [
+              "overviewHero",
+              "overviewThemeChange",
+              "overviewRelationshipJudgment",
+              "overviewObservationFocus",
+              "overviewNarrative",
+              "overviewReaderValue",
+            ];
+  const generatedRoles = new Set(fragments.map((fragment) => fragment.sourceRole).filter(Boolean));
+  const missingRoles = requiredRoles.filter((role) => !generatedRoles.has(role));
+  if (missingRoles.length) {
+    throw new Error(`${page.pageRole} model draft missing required roles: ${missingRoles.join(", ")}`);
+  }
+  const hasProviderFallbackText = fragments.some((fragment) => fragment.text.includes("未通过结构或真实性约束"));
+  if (hasProviderFallbackText) {
+    throw new Error(`${page.pageRole} model draft contains provider fallback text`);
+  }
+
   return createPageSourceSet(page, { generatedTextFragments: fragments });
 }
 
 async function createInitialProviderBackedPageVersions(taskId: string, pages: Page[]) {
-  const targetPages = pages.filter((page) => page.pageRole === "overview" || page.pageRole === "summary");
+  const targetPages = pages.filter(
+    (page) =>
+      page.pageRole === "overview" ||
+      page.pageRole === "summary" ||
+      page.pageRole === "feature" ||
+      page.pageRole === "case-study" ||
+      page.pageType.includes("数据") ||
+      page.pageType.includes("案例"),
+  );
   if (!targetPages.length) {
     return createInitialPageVersions(taskId, pages);
   }
 
   const generatedPageSourceSets = new Map<string, PageSourceSet>();
   const failedRoles: string[] = [];
+  const failedPageIds = new Set<string>();
 
   await Promise.all(
     targetPages.map(async (page) => {
@@ -513,22 +572,37 @@ async function createInitialProviderBackedPageVersions(taskId: string, pages: Pa
         }
       } catch (error) {
         failedRoles.push(page.pageRole);
-        console.warn(`${page.pageRole} initial local model generation failed; falling back to offline draft.`, error);
+        failedPageIds.add(page.id);
+        console.warn(`${page.pageRole} initial local model generation failed; marking page as fallback.`, error);
       }
     }),
   );
 
   const sourceSummary =
     generatedPageSourceSets.size === targetPages.length
-      ? `本地 ${services.generationProviderConfig.model} 生成 overview / summary 初始候选内容`
+      ? `本地 ${services.generationProviderConfig.model} 生成内容页初始候选内容`
       : generatedPageSourceSets.size > 0
-        ? `本地 ${services.generationProviderConfig.model} 部分生成初始候选内容，${failedRoles.join(" / ")} 回退离线草稿`
-        : `本地模型不可用，overview / summary 回退离线草稿`;
+        ? `本地 ${services.generationProviderConfig.model} 部分生成初始候选内容，${failedRoles.join(" / ")} 标记为 fallback`
+        : `本地模型不可用，内容页标记为 fallback`;
 
-  return createInitialPageVersions(taskId, pages, generatedPageSourceSets).map((version) => ({
+  const pageGenerationStatusByPageId = Object.fromEntries(
+    pages.map((page) => [
+      page.id,
+      generatedPageSourceSets.has(page.id)
+        ? "model-generated"
+        : failedPageIds.has(page.id)
+          ? "fallback"
+          : targetPages.some((targetPage) => targetPage.id === page.id)
+            ? "fallback"
+            : "rule-skeleton",
+    ] satisfies [string, PageGenerationStatus]),
+  );
+
+  return createInitialPageVersions(taskId, pages, generatedPageSourceSets, { versionCount: 1 }).map((version) => ({
     ...version,
-    promptNote: `${sourceSummary} · ${version.promptNote}`,
-    variantSummary: `${sourceSummary} · ${version.variantSummary}`,
+    promptNote: sourceSummary,
+    variantSummary: "模型正文候选",
+    pageGenerationStatusByPageId,
   }));
 }
 
@@ -1615,22 +1689,26 @@ export const useAppStore = create<AppState>()(
           return;
         }
 
-        const seed = createSeedTask();
-        const contentPages = seed.pages.map((page) => normalizePage(page)).filter((page) => page.pageKind === "content");
-        const initialPageVersions = await createInitialProviderBackedPageVersions(seed.task.id, contentPages);
         set({
-          projects: [seed.project],
-          tasks: [seed.task],
-          pages: contentPages,
+          projects: [
+            {
+              id: "project-default",
+              name: "default project",
+              taskIds: [],
+              isDefault: true,
+            },
+          ],
+          tasks: [],
+          pages: [],
           packagingPages: [],
           packagingCandidates: [],
-          pageVersions: initialPageVersions.map((version) => normalizePageVersion(version)),
+          pageVersions: [],
           finalCompositions: [],
           finalCompositionPages: [],
           hardEditDrafts: [],
           editedCompositionPageResults: [],
-          assets: seed.assets,
-          activeTaskId: seed.task.id,
+          assets: [],
+          activeTaskId: null,
           isBootstrapped: true,
         });
       },
@@ -1853,12 +1931,12 @@ export const useAppStore = create<AppState>()(
                     ...packagingPage.coverMeta,
                     heroLabel:
                       packagingPage.renderSeed % 2 === 0
-                        ? "本期主题：生成式产品从试验走向结构化落地"
-                        : "本期主题：AI 工作流产品进入组织级部署阶段",
+                        ? "本期主题：围绕当前内容方案建立清晰入口"
+                        : "本期主题：从主题判断进入完整阅读路径",
                     subtitle:
                       packagingPage.renderSeed % 2 === 0
-                        ? "聚焦模型发布、应用落地与商业化信号"
-                        : "追踪模型能力、产品交付与组织采用节奏",
+                        ? "聚焦主题线索、重点页面与后续阅读价值"
+                        : "追踪核心判断、支撑内容与收束观点",
                   }
                 : packagingPage.coverMeta,
           });
@@ -2300,8 +2378,8 @@ export const useAppStore = create<AppState>()(
             modelSourceSet = await createTextPageModelGeneratedSourceSet(focusPage, trimmedPrompt);
             generationSummary = `本地 ${services.generationProviderConfig.model} 生成 ${focusPage.pageRole} 草稿`;
           } catch (error) {
-            console.warn(`${focusPage.pageRole} local model generation failed; falling back to offline draft.`, error);
-            generationSummary = `本地模型不可用，回退离线 ${focusPage.pageRole} 草稿`;
+            console.warn(`${focusPage.pageRole} local model generation failed; marking regeneration as fallback.`, error);
+            generationSummary = `本地模型不可用，${focusPage.pageRole} 标记为 fallback`;
           }
         }
 
@@ -2345,7 +2423,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: "pagescut-v1",
-      version: 9,
+      version: 10,
       migrate: (persistedState) => {
         const state = persistedState as Partial<AppState> | undefined;
         if (!state) {
@@ -2373,46 +2451,68 @@ export const useAppStore = create<AppState>()(
             }))
           : [];
 
-        const incomingVersions = Array.isArray(state.pageVersions) ? state.pageVersions : [];
+        const obsoleteSeedTaskIds = new Set(
+          (Array.isArray(state.assets) ? state.assets : [])
+            .filter((asset) => asset.sourceVersionId === "seed-version-placeholder")
+            .map((asset) => asset.taskId),
+        );
+        const activeTasks = tasks.filter((task) => !obsoleteSeedTaskIds.has(task.id));
+        const activeContentPages = splitContentPages.filter((page) => !obsoleteSeedTaskIds.has(page.taskId));
+        const activePackagingPages = packagingPages.filter((page) => !obsoleteSeedTaskIds.has(page.taskId));
+        const activeTaskIds = new Set(activeTasks.map((task) => task.id));
+        const activeProjects = Array.isArray(state.projects)
+          ? state.projects.map((project) => ({
+              ...project,
+              taskIds: project.taskIds.filter((taskId) => activeTaskIds.has(taskId)),
+            }))
+          : [];
+
+        const incomingVersions = Array.isArray(state.pageVersions)
+          ? state.pageVersions.filter((version) => !obsoleteSeedTaskIds.has(version.taskId))
+          : [];
         const hasTaskScopedVersions = incomingVersions.every(
           (version) => typeof version?.taskId === "string" && version?.previewsByPageId && typeof version.previewsByPageId === "object",
         );
 
         const rebuiltVersions = hasTaskScopedVersions
           ? incomingVersions.map((version) => normalizePageVersion(version))
-          : tasks.flatMap((task) =>
+          : activeTasks.flatMap((task) =>
               createInitialPageVersions(
                 task.id,
-                splitContentPages.filter((page) => page.taskId === task.id).sort((a, b) => a.index - b.index),
+                activeContentPages.filter((page) => page.taskId === task.id).sort((a, b) => a.index - b.index),
               ).map((version) => normalizePageVersion(version)),
             );
 
         const packagingCandidates = incomingPackagingCandidates.length
-          ? incomingPackagingCandidates
-          : rebuildLegacyPackagingCandidates(tasks, packagingPages, splitContentPages, rebuiltVersions);
+          ? incomingPackagingCandidates.filter((candidate) => !obsoleteSeedTaskIds.has(candidate.taskId))
+          : rebuildLegacyPackagingCandidates(activeTasks, activePackagingPages, activeContentPages, rebuiltVersions);
 
         const incomingFinalCompositions = Array.isArray(state.finalCompositions)
-          ? state.finalCompositions.map((composition) => normalizeFinalComposition(composition))
+          ? state.finalCompositions.filter((composition) => !obsoleteSeedTaskIds.has(composition.taskId)).map((composition) => normalizeFinalComposition(composition))
           : [];
         const incomingFinalCompositionPages = Array.isArray(state.finalCompositionPages)
-          ? state.finalCompositionPages.map((page) => normalizeFinalCompositionPage(page))
+          ? state.finalCompositionPages.filter((page) => !obsoleteSeedTaskIds.has(page.taskId)).map((page) => normalizeFinalCompositionPage(page))
           : [];
-        const incomingHardEditDrafts = Array.isArray(state.hardEditDrafts) ? state.hardEditDrafts : [];
+        const incomingHardEditDrafts = Array.isArray(state.hardEditDrafts)
+          ? state.hardEditDrafts.filter((draft) => !obsoleteSeedTaskIds.has(draft.taskId))
+          : [];
         const incomingEditedCompositionPageResults = Array.isArray((state as Partial<AppState>).editedCompositionPageResults)
-          ? ((state as Partial<AppState>).editedCompositionPageResults ?? []).map((item) =>
-              normalizeEditedCompositionPageResult(item as EditedCompositionPageResult),
-            )
+          ? ((state as Partial<AppState>).editedCompositionPageResults ?? [])
+              .filter((item) => !obsoleteSeedTaskIds.has((item as EditedCompositionPageResult).taskId))
+              .map((item) => normalizeEditedCompositionPageResult(item as EditedCompositionPageResult))
           : [];
 
         const rebuiltLegacyState =
           incomingFinalCompositions.length || incomingFinalCompositionPages.length
             ? null
-            : rebuildLegacyCompositionState(tasks, splitContentPages, packagingPages, rebuiltVersions, packagingCandidates, incomingHardEditDrafts);
+            : rebuildLegacyCompositionState(activeTasks, activeContentPages, activePackagingPages, rebuiltVersions, packagingCandidates, incomingHardEditDrafts);
 
         return {
           ...state,
-          pages: splitContentPages,
-          packagingPages,
+          projects: activeProjects.length ? activeProjects : [{ id: "project-default", name: "default project", taskIds: [], isDefault: true }],
+          tasks: activeTasks,
+          pages: activeContentPages,
+          packagingPages: activePackagingPages,
           packagingCandidates,
           pageVersions: rebuiltVersions,
           finalCompositions: incomingFinalCompositions.length
@@ -2425,7 +2525,10 @@ export const useAppStore = create<AppState>()(
             ? incomingHardEditDrafts.map((draft) => normalizeHardEditDraft(draft as HardEditPageDraft))
             : rebuiltLegacyState?.migratedDrafts ?? [],
           editedCompositionPageResults: incomingEditedCompositionPageResults,
-          assets: Array.isArray(state.assets) ? state.assets.map((asset) => normalizeAsset(asset)) : [],
+          assets: Array.isArray(state.assets)
+            ? state.assets.filter((asset) => !obsoleteSeedTaskIds.has(asset.taskId)).map((asset) => normalizeAsset(asset))
+            : [],
+          activeTaskId: state.activeTaskId && obsoleteSeedTaskIds.has(state.activeTaskId) ? null : state.activeTaskId,
         } as AppState;
       },
       partialize: (state) => ({

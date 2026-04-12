@@ -34,7 +34,7 @@ function stripReaderInternalText(value: string) {
     .replace(/主题叙述\s*·\s*[^，。！？!?]+/g, "主题叙述")
     .replace(/从“[^”]*(像刊首|像刊末|建立总览页|先收束主题判断|先建立总体判断|进入细节页面|后续内容页)[^”]*”的?[^，。！？!?]*[，,]?/g, "")
     .replace(/在“[^”]*(边界提醒|阅读顺序|不重新展开|过早摊开|后续内容页)[^”]*”这一限制下[，,]?/g, "")
-    .replace(/围绕\s+([^，。！？!?]+?)\s*(建立总览页|做最终收束|先收束主题判断|再给出后续内容页)[^，。！？!?]*/g, "围绕“$1”")
+    .replace(/围绕\s+([^，。！？!?]+?)\s*(建立总览页|做最终收束|先收束主题判断|再给出后续内容页)[^，。！？!?]*/g, "$1")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -81,7 +81,7 @@ function sanitizeReaderBlock(block: PageModelBlock): PageModelBlock | null {
       return items.length ? { ...block, items } : block;
     }
     case "metrics": {
-      const items = block.items.map((item) => ({ ...item, detail: stripReaderInternalText(item.detail) || "围绕主题保持概括判断。" }));
+      const items = block.items.map((item) => ({ ...item, detail: stripReaderInternalText(item.detail) || "主题判断保持概括表达。" }));
       return { ...block, items };
     }
     default:
@@ -112,6 +112,17 @@ function clampLines(lines: number): CSSProperties {
     overflowWrap: "anywhere",
     minWidth: 0,
   };
+}
+
+function readableTextStyle(allowClamp: boolean, lines: number): CSSProperties {
+  return allowClamp
+    ? clampLines(lines)
+    : {
+        display: "block",
+        overflow: "visible",
+        overflowWrap: "anywhere",
+        minWidth: 0,
+      };
 }
 
 function buildOverviewTheme(seed: number) {
@@ -165,6 +176,10 @@ export function resolveSupportedPageType(page: Page): SupportedPageType | null {
 
   if (page.pageRole === "summary" || page.pageType.includes("结语") || page.pageType.includes("总结")) {
     return "summary";
+  }
+
+  if (page.pageRole === "feature") {
+    return "overview";
   }
 
   return null;
@@ -619,6 +634,7 @@ export function fillContractToPageModel(contract: LayoutContract, variant = 0): 
               type: "visual",
               title: "案例场景",
               caption: contract.visualCaption,
+              imageUrl: contract.visualImageUrl,
               kicker: "Narrative Entry",
             },
           ],
@@ -888,10 +904,12 @@ function HeroBlock({
   block,
   theme,
   density,
+  allowClamp = true,
 }: {
   block: Extract<PageModelBlock, { type: "hero" }>;
   theme: PageModel["theme"];
   density: PageRenderDensity;
+  allowClamp?: boolean;
 }) {
   const isCompact = density === "compact" || block.summary.length > 42;
   return (
@@ -908,8 +926,8 @@ function HeroBlock({
       }}
     >
       <div style={{ fontSize: isCompact ? 10 : 11, letterSpacing: "0.18em", textTransform: "uppercase", color: "#6b7280" }}>{block.eyebrow}</div>
-      <h1 style={{ margin: "12px 0 0", fontSize: isCompact ? 28 : 32, lineHeight: isCompact ? 1.15 : 1.2, fontWeight: 700, color: theme.accent, ...clampLines(2) }}>{block.title}</h1>
-      <p style={{ margin: "14px 0 0", fontSize: isCompact ? 15 : 16, lineHeight: isCompact ? 1.72 : 1.9, color: theme.ink, ...clampLines(isCompact ? 3 : 4) }}>{block.summary}</p>
+      <h1 style={{ margin: "12px 0 0", fontSize: isCompact ? 28 : 32, lineHeight: isCompact ? 1.15 : 1.2, fontWeight: 700, color: theme.accent, ...readableTextStyle(allowClamp, 2) }}>{block.title}</h1>
+      <p style={{ margin: "14px 0 0", fontSize: isCompact ? 15 : 16, lineHeight: isCompact ? 1.72 : 1.9, color: theme.ink, ...readableTextStyle(allowClamp, isCompact ? 3 : 4) }}>{block.summary}</p>
     </section>
   );
 }
@@ -982,10 +1000,12 @@ function RichTextBlock({
   block,
   theme,
   density,
+  allowClamp = true,
 }: {
   block: Extract<PageModelBlock, { type: "rich-text" }>;
   theme: PageModel["theme"];
   density: PageRenderDensity;
+  allowClamp?: boolean;
 }) {
   const isCompact = density === "compact" || block.title === "来源 / 备注";
   return (
@@ -1008,7 +1028,7 @@ function RichTextBlock({
       <div style={{ fontSize: isCompact ? 10 : 11, letterSpacing: "0.18em", textTransform: "uppercase", color: "#6b7280" }}>{block.title}</div>
       <div style={{ display: "grid", gap: isCompact ? 8 : 12, marginTop: isCompact ? 10 : 14, minHeight: 0, height: "100%" }}>
         {block.paragraphs.map((paragraph, index) => (
-          <p key={createBlockId(block.id, index)} style={{ margin: 0, fontSize: isCompact ? 14 : 15, lineHeight: isCompact ? 1.75 : 1.9, color: "#374151", ...clampLines(isCompact ? 3 : 4) }}>
+          <p key={createBlockId(block.id, index)} style={{ margin: 0, fontSize: isCompact ? 14 : 15, lineHeight: isCompact ? 1.75 : 1.9, color: "#374151", ...readableTextStyle(allowClamp, isCompact ? 3 : 4) }}>
             {paragraph}
           </p>
         ))}
@@ -1021,10 +1041,12 @@ function BulletListBlock({
   block,
   theme,
   density,
+  allowClamp = true,
 }: {
   block: Extract<PageModelBlock, { type: "bullet-list" }>;
   theme: PageModel["theme"];
   density: PageRenderDensity;
+  allowClamp?: boolean;
 }) {
   const isCompact = density === "compact" || block.title === "读图提示";
   return (
@@ -1051,7 +1073,7 @@ function BulletListBlock({
             <span style={{ display: "inline-flex", width: isCompact ? 16 : 18, height: isCompact ? 16 : 18, alignItems: "center", justifyContent: "center", borderRadius: 999, background: "white", color: theme.accent, fontSize: isCompact ? 10 : 11, fontWeight: 700 }}>
               {index + 1}
             </span>
-            <span style={{ fontSize: isCompact ? 13 : 14, lineHeight: isCompact ? 1.65 : 1.8, color: "#4b5563", ...clampLines(isCompact ? 2 : 3) }}>{item}</span>
+            <span style={{ fontSize: isCompact ? 13 : 14, lineHeight: isCompact ? 1.65 : 1.8, color: "#4b5563", ...readableTextStyle(allowClamp, isCompact ? 2 : 3) }}>{item}</span>
           </li>
         ))}
       </ul>
@@ -1135,16 +1157,18 @@ function CalloutBlock({
   block,
   theme,
   density,
+  allowClamp = true,
 }: {
   block: Extract<PageModelBlock, { type: "callout" }>;
   theme: PageModel["theme"];
   density: PageRenderDensity;
+  allowClamp?: boolean;
 }) {
   const isCompact = density === "compact" || block.body.length > 88 || block.title === "图表说明" || block.title === "结果 / 成效";
   return (
     <section style={{ width: "100%", minWidth: 0, height: "100%", minHeight: 0, borderRadius: 24, background: `linear-gradient(145deg, ${theme.soft} 0%, white 100%)`, padding: isCompact ? 16 : 20, border: `1px solid ${theme.border}`, boxSizing: "border-box", overflow: "hidden", display: "grid", gridTemplateRows: "auto minmax(0, 1fr)" }}>
       <div style={{ fontSize: isCompact ? 10 : 11, letterSpacing: "0.18em", textTransform: "uppercase", color: "#6b7280" }}>{block.title}</div>
-      <p style={{ margin: `${isCompact ? 10 : 12}px 0 0`, fontSize: isCompact ? 14 : 15, lineHeight: isCompact ? 1.72 : 1.85, color: theme.ink, ...clampLines(isCompact ? 4 : 5) }}>{block.body}</p>
+      <p style={{ margin: `${isCompact ? 10 : 12}px 0 0`, fontSize: isCompact ? 14 : 15, lineHeight: isCompact ? 1.72 : 1.85, color: theme.ink, ...readableTextStyle(allowClamp, isCompact ? 4 : 5) }}>{block.body}</p>
     </section>
   );
 }
@@ -1153,10 +1177,12 @@ function SignalListBlock({
   block,
   theme,
   density,
+  allowClamp = true,
 }: {
   block: Extract<PageModelBlock, { type: "signal-list" }>;
   theme: PageModel["theme"];
   density: PageRenderDensity;
+  allowClamp?: boolean;
 }) {
   const isCompact = density === "compact" || block.items.length >= 3;
   return (
@@ -1170,7 +1196,7 @@ function SignalListBlock({
             </div>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: isCompact ? 11 : 12, letterSpacing: "0.14em", textTransform: "uppercase", color: "#6b7280", ...clampLines(1) }}>{item.heading}</div>
-              <p style={{ margin: "7px 0 0", fontSize: isCompact ? 13 : 14, lineHeight: isCompact ? 1.65 : 1.8, color: "#374151", ...clampLines(isCompact ? 2 : 3) }}>{item.detail}</p>
+              <p style={{ margin: "7px 0 0", fontSize: isCompact ? 13 : 14, lineHeight: isCompact ? 1.65 : 1.8, color: "#374151", ...readableTextStyle(allowClamp, isCompact ? 2 : 3) }}>{item.detail}</p>
             </div>
           </div>
         ))}
@@ -1189,6 +1215,7 @@ function VisualBlock({
   density: PageRenderDensity;
 }) {
   const isCompact = density === "compact" || block.caption.length > 72;
+  const canRenderImage = Boolean(block.imageUrl?.startsWith("http://") || block.imageUrl?.startsWith("https://"));
   return (
     <section
       style={{
@@ -1214,33 +1241,45 @@ function VisualBlock({
       <div
         style={{
           borderRadius: 20,
-          background: `linear-gradient(135deg, ${theme.accent} 0%, rgba(255,255,255,0.96) 100%)`,
+          background: canRenderImage ? "#f8fafc" : `linear-gradient(135deg, ${theme.accent} 0%, rgba(255,255,255,0.96) 100%)`,
           minHeight: 0,
           height: "100%",
           position: "relative",
           overflow: "hidden",
         }}
       >
-        <div
-          style={{
-            position: "absolute",
-            inset: isCompact ? 14 : 18,
-            borderRadius: 16,
-            border: "1px solid rgba(255,255,255,0.4)",
-            background: "rgba(255,255,255,0.28)",
-          }}
-        />
-        <div
-          style={{
-            position: "absolute",
-            left: isCompact ? 22 : 26,
-            right: isCompact ? 22 : 26,
-            bottom: isCompact ? 18 : 22,
-            height: isCompact ? 38 : 46,
-            borderRadius: 14,
-            background: "rgba(255,255,255,0.75)",
-          }}
-        />
+        {canRenderImage ? (
+          <img
+            src={block.imageUrl}
+            alt={block.caption}
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+          />
+        ) : (
+          <>
+            <div
+              style={{
+                position: "absolute",
+                inset: isCompact ? 14 : 18,
+                borderRadius: 16,
+                border: "1px solid rgba(255,255,255,0.4)",
+                background: "rgba(255,255,255,0.28)",
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                left: isCompact ? 22 : 26,
+                right: isCompact ? 22 : 26,
+                bottom: isCompact ? 18 : 22,
+                height: isCompact ? 38 : 46,
+                borderRadius: 14,
+                background: "rgba(255,255,255,0.75)",
+              }}
+            />
+          </>
+        )}
       </div>
       <p style={{ margin: 0, fontSize: isCompact ? 13 : 14, lineHeight: isCompact ? 1.68 : 1.8, color: theme.ink, ...clampLines(isCompact ? 2 : 3) }}>{block.caption}</p>
     </section>
@@ -1479,24 +1518,24 @@ function ContentSlotsBlock({
   );
 }
 
-function renderBlock(block: PageModelBlock, theme: PageModel["theme"], density: PageRenderDensity) {
+function renderBlock(block: PageModelBlock, theme: PageModel["theme"], density: PageRenderDensity, allowClamp = true) {
   switch (block.type) {
     case "hero":
-      return <HeroBlock key={block.id} block={block} theme={theme} density={density} />;
+      return <HeroBlock key={block.id} block={block} theme={theme} density={density} allowClamp={allowClamp} />;
     case "metrics":
       return <MetricsBlock key={block.id} block={block} theme={theme} density={density} />;
     case "rich-text":
-      return <RichTextBlock key={block.id} block={block} theme={theme} density={density} />;
+      return <RichTextBlock key={block.id} block={block} theme={theme} density={density} allowClamp={allowClamp} />;
     case "bullet-list":
-      return <BulletListBlock key={block.id} block={block} theme={theme} density={density} />;
+      return <BulletListBlock key={block.id} block={block} theme={theme} density={density} allowClamp={allowClamp} />;
     case "chart":
       return <ChartBlock key={block.id} block={block} theme={theme} density={density} />;
     case "table":
       return <TableBlock key={block.id} block={block} theme={theme} density={density} />;
     case "callout":
-      return <CalloutBlock key={block.id} block={block} theme={theme} density={density} />;
+      return <CalloutBlock key={block.id} block={block} theme={theme} density={density} allowClamp={allowClamp} />;
     case "signal-list":
-      return <SignalListBlock key={block.id} block={block} theme={theme} density={density} />;
+      return <SignalListBlock key={block.id} block={block} theme={theme} density={density} allowClamp={allowClamp} />;
     case "visual":
       return <VisualBlock key={block.id} block={block} theme={theme} density={density} />;
     case "content-slots":
@@ -1750,7 +1789,7 @@ export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
     >
       {safePageModel.pageType === "overview" ? (
         <>
-          {heroBlocks.length ? <div style={{ ...getHeroLayout(safePageModel.pageType), minWidth: 0 }}>{heroBlocks.map((block) => renderBlock(block, safePageModel.theme, density))}</div> : null}
+          {heroBlocks.length ? <div style={{ ...getHeroLayout(safePageModel.pageType), minWidth: 0 }}>{heroBlocks.map((block) => renderBlock(block, safePageModel.theme, density, false))}</div> : null}
           <section style={getBodyLayout(safePageModel.pageType)}>
             <div
               style={{
@@ -1762,7 +1801,7 @@ export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
                 gridTemplateRows: getOverviewMainColumnRows(readerVisibleMainBlocks),
               }}
             >
-              {readerVisibleMainBlocks.map((block) => renderBlock(block, safePageModel.theme, density))}
+              {readerVisibleMainBlocks.map((block) => renderBlock(block, safePageModel.theme, density, false))}
             </div>
             <div
               style={{
@@ -1774,7 +1813,7 @@ export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
                 gridTemplateRows: getOverviewAsideColumnRows(mainBlocks),
               }}
             >
-              {asideBlocks.map((block) => renderBlock(block, safePageModel.theme, density))}
+              {asideBlocks.map((block) => renderBlock(block, safePageModel.theme, density, false))}
             </div>
           </section>
         </>
@@ -1822,7 +1861,7 @@ export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
                 gridTemplateRows: getSummaryMainColumnRows(readerVisibleMainBlocks),
               }}
             >
-              {readerVisibleMainBlocks.map((block) => renderBlock(block, safePageModel.theme, density))}
+              {readerVisibleMainBlocks.map((block) => renderBlock(block, safePageModel.theme, density, false))}
             </div>
             <div
               style={{
@@ -1834,7 +1873,7 @@ export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
                 gridTemplateRows: getSummaryAsideColumnRows(mainBlocks),
               }}
             >
-              {asideBlocks.map((block) => renderBlock(block, safePageModel.theme, density))}
+              {asideBlocks.map((block) => renderBlock(block, safePageModel.theme, density, false))}
             </div>
           </section>
         </>

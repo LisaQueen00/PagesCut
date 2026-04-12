@@ -1,8 +1,17 @@
 import type {
+  ExpressionMode,
+  Page,
+} from "@/types/domain";
+import type {
+  ContentPageGenerationRequest,
+  GeneratedOutlinePagePlan,
+  GeneratedOutlinePageRole,
+  GeneratedOutlinePlanResult,
   GeneratedTextDraftFragment,
   GeneratedTextDraftResult,
   GenerationProvider,
   GenerationProviderConfig,
+  NormalizedTaskInput,
   OverviewGenerationRequest,
   ProviderContext,
   SummaryGenerationRequest,
@@ -15,7 +24,7 @@ interface OllamaGenerateResponse {
 interface GroundingBoundary {
   normalizedSource: string;
   fallbackTopic: string;
-  pageRole: "overview" | "summary";
+  pageRole: "overview" | "summary" | "data" | "case" | "feature";
 }
 
 function normalizeWhitespace(value: string) {
@@ -62,9 +71,14 @@ function getUserTextSources(page: OverviewGenerationRequest["page"]) {
 function getNarrativeTopic(page: OverviewGenerationRequest["page"]) {
   const raw = page.outlineText || page.pageType;
   const normalized = normalizeWhitespace(raw)
+    .replace(/^(请|帮我|我想|希望|准备|需要)\s*/, "")
+    .replace(/^(生成|做|制作|产出)\s*/, "")
+    .replace(/^(一期|一份|一个)\s*/, "")
     .replace(/^(围绕|关于|总结|建立|生成|制作|收束|提炼)\s*/, "")
     .replace(/\s*(建立总览页|做最终收束|沉淀可带走判断|给出后续内容页|先收束主题判断|先建立总体判断|再进入细节页面|再给出后续内容页|提炼一页|选择一个真实业务场景)[\s\S]*$/, "")
     .replace(/[。！？!?].*$/, "")
+    .replace(/相关内容的?/g, "")
+    .replace(/相关的?/g, "")
     .replace(/(月刊|周报|日报|报告|PPT|幻灯片|作品)$/i, "")
     .trim();
 
@@ -144,47 +158,9 @@ function hasMetaNarration(value: string) {
 }
 
 function fallbackGroundedText(label: string, boundary: GroundingBoundary, role?: string) {
-  if (boundary.pageRole === "summary") {
-    if (role === "summaryNextSignals") {
-      return `后续观察应集中在真实采用是否持续、支撑信号是否增多，以及应用节奏能否从短期试探进入稳定验证。`;
-    }
+  const roleLabel = role || label || boundary.pageRole;
 
-    if (role === "summaryUncertainty") {
-      return `尚未被材料证明的判断只适合作为观察方向，确定表达应集中在已知变化、后续信号和判断弹性。`;
-    }
-
-    if (label.includes("边界")) {
-      return `围绕“${boundary.fallbackTopic}”，尚未被材料证明的判断只保留为观察方向；确定表达集中在已知变化、后续信号和判断弹性。`;
-    }
-
-    if (label.includes("行动") || label.includes("建议")) {
-      return `围绕“${boundary.fallbackTopic}”，后续关注点集中在变化是否持续、支撑信号是否增多、应用节奏是否稳定。`;
-    }
-
-    return `围绕“${boundary.fallbackTopic}”，整期结论保持克制：已出现的变化提示读者继续观察模型能力、产品落地与组织采用之间的关系。`;
-  }
-
-  if (role === "overviewThemeChange") {
-    return `人工智能相关变化正在从单点事件转向连续演进，模型能力、产品落地与业务采用之间的联动比单个热点更值得关注。`;
-  }
-
-  if (role === "overviewRelationshipJudgment") {
-    return `能力提升会推动产品试探，产品试探又会改变组织采用节奏；真正有价值的判断来自这些关系，而不是热点词堆叠。`;
-  }
-
-  if (role === "overviewObservationFocus") {
-    return `输入信息有限时，概括判断优先于具体公司、金额和指标断言，读者应把注意力放在可持续的采用信号上。`;
-  }
-
-  if (label.includes("边界")) {
-    return `围绕“${boundary.fallbackTopic}”，现有输入不足以支撑公司、金额、比例或指标层面的细节判断，读者需要先把注意力放在变化方向和后续信号上。`;
-  }
-
-  if (label.includes("判断")) {
-    return `围绕“${boundary.fallbackTopic}”，模型能力、产品落地、业务采用和组织节奏正在互相牵引，读者需要先识别哪些变化值得优先关注。`;
-  }
-
-  return `围绕“${boundary.fallbackTopic}”，人工智能相关变化从单点事件转向连续演进，概括判断优先于未核验细节。`;
+  return `模型正文片段 ${roleLabel} 未通过结构或真实性约束，请重新生成。`;
 }
 
 function constrainFragment(fragment: GeneratedTextDraftFragment, boundary: GroundingBoundary): GeneratedTextDraftFragment {
@@ -222,6 +198,53 @@ function constrainFragments(fragments: GeneratedTextDraftFragment[], boundary: G
   });
 }
 
+function getExpectedDraftRoles(pageRole: GroundingBoundary["pageRole"]) {
+  switch (pageRole) {
+    case "summary":
+      return ["summaryFinalJudgment", "summaryNextSignals", "summaryUncertainty", "summaryClosingNote", "summaryReaderTakeaway"];
+    case "data":
+      return ["dataSummary", "dataChartBrief", "dataChartExplanation", "dataTakeaway", "dataSourceNote"];
+    case "case":
+      return ["caseSubject", "caseVisualBrief", "caseScenario", "caseChallenge", "caseAction", "caseResult", "caseTakeaway"];
+    case "feature":
+      return ["featureHero", "featureAngle", "featureDetail", "featureEvidence", "featureTakeaway"];
+    case "overview":
+    default:
+      return [
+        "overviewHero",
+        "overviewThemeChange",
+        "overviewRelationshipJudgment",
+        "overviewObservationFocus",
+        "overviewNarrative",
+        "overviewReaderValue",
+      ];
+  }
+}
+
+function normalizeDraftRoles(fragments: GeneratedTextDraftFragment[], boundary: GroundingBoundary): GeneratedTextDraftFragment[] {
+  const expectedRoles = getExpectedDraftRoles(boundary.pageRole);
+  const byRole = new Map<string, GeneratedTextDraftFragment>();
+
+  fragments.forEach((fragment, index) => {
+    const role = fragment.role && expectedRoles.includes(fragment.role) ? fragment.role : expectedRoles[index];
+    if (role && !byRole.has(role)) {
+      byRole.set(role, {
+        ...fragment,
+        role,
+      });
+    }
+  });
+
+  return expectedRoles.map((role) => {
+    const fragment = byRole.get(role);
+    return {
+      role,
+      label: fragment?.label || role,
+      text: fragment?.text || fallbackGroundedText(role, boundary, role),
+    };
+  });
+}
+
 function parseFragments(raw: string, boundary: GroundingBoundary): GeneratedTextDraftFragment[] {
   const cleaned = stripThinking(raw);
 
@@ -238,7 +261,7 @@ function parseFragments(raw: string, boundary: GroundingBoundary): GeneratedText
       : [];
 
     if (fragments.length) {
-      return constrainFragments(fragments.slice(0, boundary.pageRole === "summary" ? 5 : 6), boundary);
+      return normalizeDraftRoles(constrainFragments(fragments.slice(0, boundary.pageRole === "summary" ? 5 : 6), boundary), boundary);
     }
   } catch {
     // Fall back to paragraph splitting below. The provider still returns formal
@@ -252,19 +275,117 @@ function parseFragments(raw: string, boundary: GroundingBoundary): GeneratedText
     .slice(0, 3)
     .map((text, index) => ({ label: `模型草稿 ${index + 1}`, text }));
 
-  return constrainFragments(fallbackFragments, boundary);
+  return normalizeDraftRoles(constrainFragments(fallbackFragments, boundary), boundary);
 }
 
-function buildGroundingBoundary({ page }: OverviewGenerationRequest | SummaryGenerationRequest): GroundingBoundary {
+function normalizeOutlineRole(value: unknown): GeneratedOutlinePageRole {
+  if (value === "overview" || value === "data" || value === "case-study" || value === "summary" || value === "feature") {
+    return value;
+  }
+
+  return "feature";
+}
+
+function normalizeExpressionMode(value: unknown, role: GeneratedOutlinePageRole): ExpressionMode {
+  if (value === "text" || value === "mixed-media" || value === "chart" || value === "hybrid") {
+    return value;
+  }
+
+  if (role === "data") {
+    return "chart";
+  }
+
+  if (role === "case-study") {
+    return "mixed-media";
+  }
+
+  return "text";
+}
+
+function stripOutlineMeta(value: string) {
+  return normalizeWhitespace(value)
+    .replace(/^(本页|这页|这一页|页面)\s*/, "")
+    .replace(/^(封面|封面页|目录|目录页|封底|封底页|包装页|前置包装页|后置包装页)\s*[：:·\-—、]?\s*/g, "")
+    .replace(/(应该|需要|负责|用于|承担)\s*(说明|承接|组织|展示)?/g, "")
+    .trim();
+}
+
+function containsPackagingPageIntent(value: string) {
+  return /(封面页?|目录页?|封底页?|包装页|前置包装|后置包装|刊名|封面主视觉|目录导航)/.test(value);
+}
+
+function parseOutlinePlan(raw: string, expectedPageCount?: number | null): GeneratedOutlinePagePlan[] {
+  const cleaned = stripThinking(raw);
+  const payload = JSON.parse(extractJsonPayload(cleaned)) as {
+    pages?: Array<{
+      title?: unknown;
+      outlineText?: unknown;
+      suggestedPageRole?: unknown;
+      expressionMode?: unknown;
+      styleText?: unknown;
+      userConstraints?: unknown;
+      sourceNeeds?: unknown;
+      layoutIntent?: unknown;
+    }>;
+  };
+
+  const pages = Array.isArray(payload.pages) ? payload.pages : [];
+  const limit = Math.max(1, Math.min(expectedPageCount ?? pages.length, 12));
+
+  return pages
+    .slice(0, limit)
+    .map((item, index) => {
+      const role = normalizeOutlineRole(item.suggestedPageRole);
+      const title = stripOutlineMeta(typeof item.title === "string" ? item.title : `内容页 ${index + 1}`) || `内容页 ${index + 1}`;
+      const rawOutlineText = typeof item.outlineText === "string" ? item.outlineText : "";
+      const outlineText = stripOutlineMeta(rawOutlineText);
+      const safeOutlineText =
+        containsPackagingPageIntent(rawOutlineText) && !outlineText
+          ? `${title}：围绕当前主题展开读者真正需要阅读的正文内容，不生成封面、目录或其他包装页。`
+          : outlineText;
+
+      return {
+        title,
+        outlineText: safeOutlineText || `${title}：围绕当前主题展开一个独立内容侧面。`,
+        suggestedPageRole: role,
+        expressionMode: normalizeExpressionMode(item.expressionMode, role),
+        styleText: stripOutlineMeta(typeof item.styleText === "string" ? item.styleText : "") || "克制、清晰、适合页级阅读",
+        userConstraints:
+          stripOutlineMeta(typeof item.userConstraints === "string" ? item.userConstraints : "") ||
+          "保持内容聚焦，避免重复其他页面的判断。",
+        sourceNeeds: typeof item.sourceNeeds === "string" ? stripOutlineMeta(item.sourceNeeds) : undefined,
+        layoutIntent: typeof item.layoutIntent === "string" ? stripOutlineMeta(item.layoutIntent) : undefined,
+      };
+    })
+    .filter((item) => item.title && item.outlineText);
+}
+
+function getBoundaryPageRole(page: Page): GroundingBoundary["pageRole"] {
+  if (page.pageRole === "summary") {
+    return "summary";
+  }
+  if (page.pageType.includes("数据")) {
+    return "data";
+  }
+  if (page.pageRole === "case-study" || page.pageType.includes("案例")) {
+    return "case";
+  }
+  if (page.pageRole === "feature") {
+    return "feature";
+  }
+  return "overview";
+}
+
+function buildGroundingBoundary({ page }: OverviewGenerationRequest | SummaryGenerationRequest | ContentPageGenerationRequest): GroundingBoundary {
   const sourceText = [page.pageType, getNarrativeTopic(page), page.outlineText, ...getUserTextSources(page)].filter(Boolean).join(" ");
   return {
     normalizedSource: normalizeForGrounding(sourceText),
     fallbackTopic: getNarrativeTopic(page),
-    pageRole: page.pageRole === "summary" ? "summary" : "overview",
+    pageRole: getBoundaryPageRole(page),
   };
 }
 
-function buildAllowedSource({ page }: OverviewGenerationRequest | SummaryGenerationRequest) {
+function buildAllowedSource({ page }: OverviewGenerationRequest | SummaryGenerationRequest | ContentPageGenerationRequest) {
   const userSources = getUserTextSources(page);
   return [
     `页面类型：${page.pageType}`,
@@ -273,11 +394,61 @@ function buildAllowedSource({ page }: OverviewGenerationRequest | SummaryGenerat
   ];
 }
 
+function buildDataPrompt(request: ContentPageGenerationRequest) {
+  const allowedSource = buildAllowedSource(request);
+
+  return [
+    "你是 PagesCut 的中文刊物编辑。请为一个 data 内容页生成图表支撑型草稿。",
+    "只输出 JSON，不要输出 Markdown，不要解释。",
+    "JSON 格式：{\"fragments\":[{\"role\":\"dataSummary\",\"label\":\"...\",\"text\":\"...\"}]}",
+    "必须输出 5 个 fragments，role 只能是：dataSummary、dataChartBrief、dataChartExplanation、dataTakeaway、dataSourceNote。",
+    "每个 role 的 text 必须明显不同；每段 35-75 字中文；只写当前主题的数据页内容，不写页面策略。",
+    "dataChartBrief 写成图表应表达的内容简述，不要编造具体数值；dataChartExplanation 写成图表解释正文。",
+    ...buildMetaNarrationPromptLines(),
+    ...buildTruthfulnessPromptLines(),
+    "允许输入：",
+    ...allowedSource,
+  ].join("\n");
+}
+
+function buildCasePrompt(request: ContentPageGenerationRequest) {
+  const allowedSource = buildAllowedSource(request);
+
+  return [
+    "你是 PagesCut 的中文刊物编辑。请为一个 case 内容页生成案例叙事型草稿。",
+    "只输出 JSON，不要输出 Markdown，不要解释。",
+    "JSON 格式：{\"fragments\":[{\"role\":\"caseSubject\",\"label\":\"...\",\"text\":\"...\"}]}",
+    "必须输出 7 个 fragments，role 只能是：caseSubject、caseVisualBrief、caseScenario、caseChallenge、caseAction、caseResult、caseTakeaway。",
+    "每个 role 的 text 必须明显不同；每段 35-80 字中文；只写当前主题的案例内容，不写页面策略。",
+    "caseVisualBrief 写成可用于图片搜索或图片生成的视觉需求描述，不要声称已经有真实图片。",
+    ...buildMetaNarrationPromptLines(),
+    ...buildTruthfulnessPromptLines(),
+    "允许输入：",
+    ...allowedSource,
+  ].join("\n");
+}
+
+function buildFeaturePrompt(request: ContentPageGenerationRequest) {
+  const allowedSource = buildAllowedSource(request);
+
+  return [
+    "你是 PagesCut 的中文刊物编辑。请为一个 feature 中段内容页生成专题展开草稿。",
+    "只输出 JSON，不要输出 Markdown，不要解释。",
+    "JSON 格式：{\"fragments\":[{\"role\":\"featureHero\",\"label\":\"...\",\"text\":\"...\"}]}",
+    "必须输出 5 个 fragments，role 只能是：featureHero、featureAngle、featureDetail、featureEvidence、featureTakeaway。",
+    "每个 role 的 text 必须明显不同；每段 40-85 字中文；直接展开当前主题的一个独立侧面，不写页面策略。",
+    ...buildMetaNarrationPromptLines(),
+    ...buildTruthfulnessPromptLines(),
+    "允许输入：",
+    ...allowedSource,
+  ].join("\n");
+}
+
 function buildTruthfulnessPromptLines() {
   return [
     "真实性边界：只能使用下方“允许输入”中出现的信息。",
     "严格禁止编造允许输入中没有出现的公司名、模型名、融资金额、百分比、排名、日期或具体指标。",
-    "如果允许输入不足，只能使用“模型能力、产品落地、业务采用、组织节奏、后续支撑页面”等概括表达。",
+    "如果允许输入不足，只能围绕主题对象、趋势关系、读者价值、后续观察和未核验细节保持概括表达。",
   ];
 }
 
@@ -342,19 +513,37 @@ function buildSummaryPrompt(request: SummaryGenerationRequest) {
   ].join("\n");
 }
 
+function buildOutlinePlanPrompt(input: NormalizedTaskInput) {
+  const desiredPageCount = Math.max(1, Math.min(input.desiredPageCount ?? 4, 12));
+
+  return [
+    "你是 PagesCut 的刊物/报告页级策划模型。请根据用户任务生成 Stage 1 的内容页大纲计划。",
+    "只输出 JSON，不要输出 Markdown，不要解释。",
+    "JSON 格式：{\"pages\":[{\"title\":\"...\",\"outlineText\":\"...\",\"suggestedPageRole\":\"overview|data|case-study|summary|feature\",\"expressionMode\":\"text|mixed-media|chart|hybrid\",\"styleText\":\"...\",\"userConstraints\":\"...\",\"sourceNeeds\":\"...\",\"layoutIntent\":\"...\"}]}",
+    `必须输出 ${desiredPageCount} 个内容页；不要默认固定为 overview/data/case/summary 四页，也不要强制四种页型都出现。`,
+    "PagesCut 阶段边界：Stage 1 只生成内容页大纲；封面、目录、封底、前置包装页、后置包装页会在后续 packaging 阶段生成，绝不能出现在 pages[] 中。",
+    "内容页计数不包含封面、目录、封底；如果用户要求至少 7 页内容页，pages[] 就必须是 7 个正文内容页。",
+    "title 禁止以“封面、目录、封底、包装页、刊名、封面主视觉、目录导航”开头或命名。",
+    "suggestedPageRole 必须从以下值选择：overview、data、case-study、summary、feature。",
+    "页型选择规则：overview 适合开场综述；data 只在需要数据/图表支撑时使用；case-study 只在适合案例叙事时使用；summary 适合最后收束；feature 用于专题拆解、观察、影响、风险等中段内容。",
+    "expressionMode 必须结合页型和素材需求选择：text、mixed-media、chart、hybrid。",
+    "layoutIntent 只写轻量布局意图，例如 hero+text、chartExplanationPair、imageTextPair、text panels；不要输出具体 HTML/CSS。",
+    "outlineText 必须直接描述这一页要讲的作品内容，不要写页面职责说明、contract、调试信息或开发计划。",
+    "请让相邻页面主题不同，避免复读同一段主题判断。",
+    `作品类型：${input.taskType === "magazine" ? "月刊" : "报告 / PPT"}`,
+    `用户任务：${input.prompt}`,
+    `标准化指令：${input.normalizedInstruction}`,
+  ].join("\n");
+}
+
 export class OllamaGenerationProvider implements GenerationProvider {
   constructor(private readonly config: GenerationProviderConfig) {}
 
-  private async generateDraft(
-    request: OverviewGenerationRequest | SummaryGenerationRequest,
-    prompt: string,
-    emptyErrorMessage: string,
-  ): Promise<GeneratedTextDraftResult> {
+  private async generateRaw(prompt: string) {
     if (!this.config.endpoint || !this.config.model) {
       throw new Error("Ollama generation provider requires endpoint and model config");
     }
 
-    const boundary = buildGroundingBoundary(request);
     const response = await fetch(`${this.config.endpoint.replace(/\/$/, "")}/api/generate`, {
       method: "POST",
       headers: {
@@ -377,7 +566,17 @@ export class OllamaGenerationProvider implements GenerationProvider {
     }
 
     const body = (await response.json()) as OllamaGenerateResponse;
-    const fragments = parseFragments(body.response ?? "", boundary);
+    return body.response ?? "";
+  }
+
+  private async generateDraft(
+    request: OverviewGenerationRequest | SummaryGenerationRequest,
+    prompt: string,
+    emptyErrorMessage: string,
+  ): Promise<GeneratedTextDraftResult> {
+    const boundary = buildGroundingBoundary(request);
+    const raw = await this.generateRaw(prompt);
+    const fragments = parseFragments(raw, boundary);
     if (!fragments.length) {
       throw new Error(emptyErrorMessage);
     }
@@ -391,11 +590,41 @@ export class OllamaGenerationProvider implements GenerationProvider {
     };
   }
 
+  async generateOutlinePlan(input: NormalizedTaskInput, _context: ProviderContext): Promise<GeneratedOutlinePlanResult> {
+    const prompt = buildOutlinePlanPrompt(input);
+    const raw = await this.generateRaw(prompt);
+    const pages = parseOutlinePlan(raw, input.desiredPageCount);
+
+    if (!pages.length) {
+      throw new Error("Ollama generation returned no usable outline pages");
+    }
+
+    return {
+      providerType: this.config.providerType,
+      model: this.config.model,
+      sourceId: `${this.config.providerType}:${this.config.model}`,
+      prompt,
+      pages,
+    };
+  }
+
   async generateOverviewDraft(request: OverviewGenerationRequest, _context: ProviderContext): Promise<GeneratedTextDraftResult> {
     return this.generateDraft(request, buildOverviewPrompt(request), "Ollama generation returned no usable overview fragments");
   }
 
   async generateSummaryDraft(request: SummaryGenerationRequest, _context: ProviderContext): Promise<GeneratedTextDraftResult> {
     return this.generateDraft(request, buildSummaryPrompt(request), "Ollama generation returned no usable summary fragments");
+  }
+
+  async generateDataDraft(request: ContentPageGenerationRequest, _context: ProviderContext): Promise<GeneratedTextDraftResult> {
+    return this.generateDraft(request, buildDataPrompt(request), "Ollama generation returned no usable data fragments");
+  }
+
+  async generateCaseDraft(request: ContentPageGenerationRequest, _context: ProviderContext): Promise<GeneratedTextDraftResult> {
+    return this.generateDraft(request, buildCasePrompt(request), "Ollama generation returned no usable case fragments");
+  }
+
+  async generateFeatureDraft(request: ContentPageGenerationRequest, _context: ProviderContext): Promise<GeneratedTextDraftResult> {
+    return this.generateDraft(request, buildFeaturePrompt(request), "Ollama generation returned no usable feature fragments");
   }
 }

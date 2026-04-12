@@ -47,8 +47,9 @@ export interface PageIntent {
 export interface ImageSourceAsset {
   id: string;
   pageId: string;
-  origin: Extract<PageFormalSourceOrigin, "user-block">;
-  sourceBlockId: string;
+  origin: PageFormalSourceOrigin;
+  sourceBlockId?: string;
+  sourceRole?: string;
   imageUrl: string;
   altText: string;
   caption: string;
@@ -58,8 +59,9 @@ export interface ImageSourceAsset {
 export interface ChartBriefSource {
   id: string;
   pageId: string;
-  origin: Extract<PageFormalSourceOrigin, "user-block">;
-  sourceBlockId: string;
+  origin: PageFormalSourceOrigin;
+  sourceBlockId?: string;
+  sourceRole?: string;
   description: string;
   chartTypeHint: string;
   label: string;
@@ -77,10 +79,11 @@ export interface TextSourceFragment {
     | "outlineText"
     | "styleText"
     | "userConstraints"
-    | "overviewGeneratedDraft"
-    | "summaryGeneratedDraft"
     | "overviewOllamaDraft"
-    | "summaryOllamaDraft";
+    | "summaryOllamaDraft"
+    | "dataOllamaDraft"
+    | "caseOllamaDraft"
+    | "featureOllamaDraft";
 }
 
 export interface PageSourceSet {
@@ -235,6 +238,7 @@ export type PageModelBlock =
       title: string;
       caption: string;
       kicker: string;
+      imageUrl?: string;
     }
   | {
       id: string;
@@ -360,6 +364,7 @@ export interface GeneratedCaseContractInput {
   resultSummary: string;
   takeaway: string;
   visualCaption: string;
+  visualImageUrl?: string;
   imageTextPairs: {
     label: string;
     outcome?: PageContentUnitOutcome;

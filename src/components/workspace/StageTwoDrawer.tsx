@@ -1,7 +1,22 @@
 import { useEffect, useState } from "react";
 import { formatTime } from "@/lib/format";
 import { hasValidApprovedTaskVersion, isValidTaskVersion } from "@/lib/versionValidation";
-import type { Page, PageVersion, Task } from "@/types/domain";
+import type { Page, PageGenerationStatus, PageVersion, Task } from "@/types/domain";
+
+function formatPageGenerationStatus(status: PageGenerationStatus | undefined) {
+  switch (status) {
+    case "model-generated":
+      return "模型生成";
+    case "rule-skeleton":
+      return "规则骨架";
+    case "fallback":
+      return "回退";
+    case "pending":
+      return "生成中";
+    default:
+      return "未记录";
+  }
+}
 
 export function StageTwoDrawer({
   open,
@@ -11,6 +26,7 @@ export function StageTwoDrawer({
   contentPages,
   versions,
   selectedVersionId,
+  selectedPageGenerationStatus,
   onToggle,
   onSelectVersion,
   onApproveVersion,
@@ -25,6 +41,7 @@ export function StageTwoDrawer({
   contentPages: Page[];
   versions: PageVersion[];
   selectedVersionId: string;
+  selectedPageGenerationStatus?: PageGenerationStatus;
   onToggle: () => void;
   onSelectVersion: (versionId: string) => void;
   onApproveVersion: (versionId: string) => void;
@@ -37,6 +54,8 @@ export function StageTwoDrawer({
   const canRegenerate = promptNote.trim().length > 0;
   const selectedVersionValid = selectedVersion ? isValidTaskVersion(selectedVersion, contentPages) : false;
   const hasApprovedValidVersion = hasValidApprovedTaskVersion(versions, contentPages) && canEnterPackaging;
+  const isModelTextCandidate = (version: PageVersion | undefined) =>
+    Boolean(version && (version.promptNote.includes("本地") || version.variantSummary.includes("模型正文候选")));
 
   useEffect(() => {
     setPromptNote("");
@@ -66,8 +85,9 @@ export function StageTwoDrawer({
             <div className="mt-4 space-y-3 text-sm text-muted">
               <p>页面：{pageLabel} · {page.pageType}</p>
               <p>当前方案：{selectedVersion?.versionLabel ?? "-"}</p>
-              <p>方案备注：{selectedVersion?.promptNote ?? "初版候选结果"}</p>
-              <p>方案摘要：{selectedVersion?.variantSummary ?? "-"}</p>
+              <p>页面生成状态：{formatPageGenerationStatus(selectedPageGenerationStatus)}</p>
+              <p>方案备注：{isModelTextCandidate(selectedVersion) ? "已接入 provider 的内容页正文来自本地模型候选；未通过模型输出的页面会显示 fallback 或规则骨架。" : selectedVersion?.promptNote ?? "初版候选结果"}</p>
+              <p>方案摘要：{isModelTextCandidate(selectedVersion) ? "模型正文候选" : selectedVersion?.variantSummary ?? "-"}</p>
               <p>风格：{page.styleText || "未设置"}</p>
               <p>作品类型：{task.workType === "magazine" ? "刊物" : "报告 / PPT"}</p>
               <p>来源：{selectedVersion?.derivedFromVersionId ? `基于 ${selectedVersion.derivedFromVersionId} 派生的整期方案` : "初始整期候选方案集"}</p>
@@ -109,8 +129,8 @@ export function StageTwoDrawer({
                           <span className="rounded-full bg-[#eef2f7] px-2.5 py-1 text-[11px] text-muted">当前预览</span>
                         ) : null}
                       </div>
-                      <p className="mt-3 text-sm leading-6 text-muted">{version.variantSummary}</p>
-                      <p className="mt-2 text-xs text-muted/90">{version.promptNote}</p>
+                      <p className="mt-3 text-sm leading-6 text-muted">{isModelTextCandidate(version) ? "模型正文候选" : version.variantSummary}</p>
+                      {!isModelTextCandidate(version) ? <p className="mt-2 text-xs text-muted/90">{version.promptNote}</p> : null}
                     </button>
                   );
                 })}

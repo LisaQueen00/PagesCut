@@ -7,6 +7,10 @@ const OutlineState = Annotation.Root({
   rawPrompt: Annotation<string>,
   workType: Annotation<WorkType>,
   normalizedInstruction: Annotation<string>,
+  desiredPageCount: Annotation<number | null>({
+    reducer: (_, next) => next,
+    default: () => null,
+  }),
   task: Annotation<Task | null>({
     reducer: (_, next) => next,
     default: () => null,
@@ -36,6 +40,7 @@ export async function runOutlineWorkflow(provider: OutlineProvider, rawPrompt: s
 
       return {
         normalizedInstruction: `${normalized.normalizedInstruction}\n${promptValue.toString()}`,
+        desiredPageCount: normalized.desiredPageCount ?? null,
       };
     })
     .addNode("generateOutline", async (state) => {
@@ -44,6 +49,7 @@ export async function runOutlineWorkflow(provider: OutlineProvider, rawPrompt: s
           taskType: state.workType,
           prompt: state.rawPrompt,
           normalizedInstruction: state.normalizedInstruction,
+          desiredPageCount: state.desiredPageCount,
         },
         { stage: "outline" },
       );

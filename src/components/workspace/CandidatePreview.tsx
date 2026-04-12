@@ -21,6 +21,7 @@ export function CandidatePreview({
   statusLabel?: string;
 }) {
   const debugPageType = pageModel?.pageType;
+  const isModelTextCandidate = version.promptNote.includes("本地") || version.variantSummary.includes("模型正文候选");
 
   return (
     <section className="soft-grid relative min-w-0 overflow-hidden rounded-[28px] border border-line/70 bg-white p-6 shadow-panel">
@@ -48,8 +49,8 @@ export function CandidatePreview({
           <div className="mt-4 flex items-center justify-between gap-3 text-sm text-muted">
             <span className="flex flex-wrap items-center gap-2">
               <span>{footerLabel ?? `${version.versionLabel} · 当前方案页级预览`}</span>
-              <span className="rounded-full bg-[#f6f8fc] px-2.5 py-1 text-[11px] text-muted">{version.variantSummary}</span>
-              {debugPageType ? (
+              <span className="rounded-full bg-[#f6f8fc] px-2.5 py-1 text-[11px] text-muted">{isModelTextCandidate ? "模型正文候选" : version.variantSummary}</span>
+              {debugPageType && !isModelTextCandidate ? (
                 <span className="rounded-full bg-[#eef3ff] px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.12em] text-[#3b5ccc]">
                   {debugPageType}
                 </span>
