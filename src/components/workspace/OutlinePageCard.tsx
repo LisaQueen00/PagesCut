@@ -24,7 +24,7 @@ function getGenerationStatusLabel(status: PageGenerationStatus) {
     case "rule-skeleton":
       return "规则骨架";
     case "fallback":
-      return "回退";
+      return "未通过";
     case "pending":
       return "生成中";
     default:

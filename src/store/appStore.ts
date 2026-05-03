@@ -562,6 +562,7 @@ async function createInitialProviderBackedPageVersions(taskId: string, pages: Pa
   const generatedPageSourceSets = new Map<string, PageSourceSet>();
   const failedRoles: string[] = [];
   const failedPageIds = new Set<string>();
+  const pageGenerationNotesByPageId = new Map<string, string>();
 
   await Promise.all(
     targetPages.map(async (page) => {
@@ -569,11 +570,14 @@ async function createInitialProviderBackedPageVersions(taskId: string, pages: Pa
         const sourceSet = await createTextPageModelGeneratedSourceSet(page, `初始候选内容生成：${page.outlineText || page.pageType}`);
         if (sourceSet) {
           generatedPageSourceSets.set(page.id, sourceSet);
+          pageGenerationNotesByPageId.set(page.id, "provider 输出已通过初始候选模型校验");
         }
       } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
         failedRoles.push(page.pageRole);
         failedPageIds.add(page.id);
-        console.warn(`${page.pageRole} initial local model generation failed; marking page as fallback.`, error);
+        pageGenerationNotesByPageId.set(page.id, reason);
+        console.warn(`${page.pageRole} initial local model generation failed; marking page as model-validation-failed.`, error);
       }
     }),
   );
@@ -582,8 +586,8 @@ async function createInitialProviderBackedPageVersions(taskId: string, pages: Pa
     generatedPageSourceSets.size === targetPages.length
       ? `本地 ${services.generationProviderConfig.model} 生成内容页初始候选内容`
       : generatedPageSourceSets.size > 0
-        ? `本地 ${services.generationProviderConfig.model} 部分生成初始候选内容，${failedRoles.join(" / ")} 标记为 fallback`
-        : `本地模型不可用，内容页标记为 fallback`;
+        ? `本地 ${services.generationProviderConfig.model} 部分生成初始候选内容，${failedRoles.join(" / ")} 未通过初始候选模型校验`
+        : `本地模型不可用，初始候选内容页未通过模型生成`;
 
   const pageGenerationStatusByPageId = Object.fromEntries(
     pages.map((page) => [
@@ -597,12 +601,14 @@ async function createInitialProviderBackedPageVersions(taskId: string, pages: Pa
             : "rule-skeleton",
     ] satisfies [string, PageGenerationStatus]),
   );
+  const pageGenerationNotes = Object.fromEntries(pageGenerationNotesByPageId);
 
   return createInitialPageVersions(taskId, pages, generatedPageSourceSets, { versionCount: 1 }).map((version) => ({
     ...version,
     promptNote: sourceSummary,
     variantSummary: "模型正文候选",
     pageGenerationStatusByPageId,
+    pageGenerationNotesByPageId: pageGenerationNotes,
   }));
 }
 

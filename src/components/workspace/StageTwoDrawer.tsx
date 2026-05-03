@@ -10,7 +10,7 @@ function formatPageGenerationStatus(status: PageGenerationStatus | undefined) {
     case "rule-skeleton":
       return "规则骨架";
     case "fallback":
-      return "回退";
+      return "未通过";
     case "pending":
       return "生成中";
     default:
@@ -51,6 +51,7 @@ export function StageTwoDrawer({
 }) {
   const [promptNote, setPromptNote] = useState("");
   const selectedVersion = versions.find((version) => version.id === selectedVersionId);
+  const selectedPageGenerationNote = selectedVersion?.pageGenerationNotesByPageId?.[page.id];
   const canRegenerate = promptNote.trim().length > 0;
   const selectedVersionValid = selectedVersion ? isValidTaskVersion(selectedVersion, contentPages) : false;
   const hasApprovedValidVersion = hasValidApprovedTaskVersion(versions, contentPages) && canEnterPackaging;
@@ -86,7 +87,8 @@ export function StageTwoDrawer({
               <p>页面：{pageLabel} · {page.pageType}</p>
               <p>当前方案：{selectedVersion?.versionLabel ?? "-"}</p>
               <p>页面生成状态：{formatPageGenerationStatus(selectedPageGenerationStatus)}</p>
-              <p>方案备注：{isModelTextCandidate(selectedVersion) ? "已接入 provider 的内容页正文来自本地模型候选；未通过模型输出的页面会显示 fallback 或规则骨架。" : selectedVersion?.promptNote ?? "初版候选结果"}</p>
+              {selectedPageGenerationNote ? <p>生成诊断：{selectedPageGenerationNote}</p> : null}
+              <p>方案备注：{isModelTextCandidate(selectedVersion) ? "初始候选内容页应走 provider 主路径；未通过模型输出校验的页面会显示为未通过或规则骨架。" : selectedVersion?.promptNote ?? "初版候选结果"}</p>
               <p>方案摘要：{isModelTextCandidate(selectedVersion) ? "模型正文候选" : selectedVersion?.variantSummary ?? "-"}</p>
               <p>风格：{page.styleText || "未设置"}</p>
               <p>作品类型：{task.workType === "magazine" ? "刊物" : "报告 / PPT"}</p>

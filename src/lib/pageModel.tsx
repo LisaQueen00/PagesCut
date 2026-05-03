@@ -90,10 +90,6 @@ function sanitizeReaderBlock(block: PageModelBlock): PageModelBlock | null {
 }
 
 function sanitizeReaderPageModel(pageModel: PageModel): PageModel {
-  if (pageModel.pageType !== "overview" && pageModel.pageType !== "summary") {
-    return pageModel;
-  }
-
   return {
     ...pageModel,
     regions: pageModel.regions.map((region) => ({
@@ -1761,10 +1757,7 @@ export function PageModelRenderer({ pageModel }: { pageModel: PageModel }) {
   const heroBlocks = heroRegion?.blocks ?? [];
   const mainBlocks = mainRegion?.blocks ?? [];
   const asideBlocks = asideRegion?.blocks ?? [];
-  const readerVisibleMainBlocks =
-    safePageModel.pageType === "overview" || safePageModel.pageType === "summary"
-      ? mainBlocks.filter((block) => block.type !== "content-slots")
-      : mainBlocks;
+  const readerVisibleMainBlocks = mainBlocks.filter((block) => block.type !== "content-slots");
   const density = getPageRenderDensity(safePageModel, readerVisibleMainBlocks, asideBlocks);
 
   return (

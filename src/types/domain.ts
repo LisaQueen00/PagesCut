@@ -203,6 +203,7 @@ export interface PageVersion {
   previewsByPageId: Record<string, string>;
   pageModelsByPageId?: Record<string, PageModel>;
   pageGenerationStatusByPageId?: Record<string, PageGenerationStatus>;
+  pageGenerationNotesByPageId?: Record<string, string>;
   isSelected: boolean;
   isApproved: boolean;
   createdAt: string;

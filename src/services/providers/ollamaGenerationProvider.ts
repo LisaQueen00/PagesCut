@@ -130,17 +130,22 @@ function hasMetaNarration(value: string) {
     "这页",
     "这一页",
     "这里的正文",
-    "这里",
     "本页判断",
     "阅读路径",
-    "承担",
-    "承接",
-    "边界",
+    "页面承担",
+    "本页承担",
+    "页面承接",
+    "本页承接",
+    "页面边界",
+    "写作边界",
     "更适合的处理方式",
     "不应只是",
     "重点不是",
-    "应该",
-    "职责",
+    "页面应该",
+    "本页应该",
+    "这页应该",
+    "页面职责",
+    "本页职责",
     "如何组织",
     "页面策略",
     "编辑策略",
@@ -161,6 +166,10 @@ function fallbackGroundedText(label: string, boundary: GroundingBoundary, role?:
   const roleLabel = role || label || boundary.pageRole;
 
   return `模型正文片段 ${roleLabel} 未通过结构或真实性约束，请重新生成。`;
+}
+
+function hasProviderFallbackText(fragments: GeneratedTextDraftFragment[]) {
+  return fragments.some((fragment) => fragment.text.includes("未通过结构或真实性约束"));
 }
 
 function constrainFragment(fragment: GeneratedTextDraftFragment, boundary: GroundingBoundary): GeneratedTextDraftFragment {
@@ -261,7 +270,8 @@ function parseFragments(raw: string, boundary: GroundingBoundary): GeneratedText
       : [];
 
     if (fragments.length) {
-      return normalizeDraftRoles(constrainFragments(fragments.slice(0, boundary.pageRole === "summary" ? 5 : 6), boundary), boundary);
+      const expectedRoleCount = getExpectedDraftRoles(boundary.pageRole).length;
+      return normalizeDraftRoles(constrainFragments(fragments.slice(0, expectedRoleCount), boundary), boundary);
     }
   } catch {
     // Fall back to paragraph splitting below. The provider still returns formal
@@ -276,6 +286,39 @@ function parseFragments(raw: string, boundary: GroundingBoundary): GeneratedText
     .map((text, index) => ({ label: `模型草稿 ${index + 1}`, text }));
 
   return normalizeDraftRoles(constrainFragments(fallbackFragments, boundary), boundary);
+}
+
+function buildDraftRepairPrompt(prompt: string, rawOutput: string, boundary: GroundingBoundary) {
+  const roles = getExpectedDraftRoles(boundary.pageRole);
+
+  return [
+    "上一次输出没有通过 PagesCut 的内容页初始候选校验。请只基于原始任务重新输出完整 JSON。",
+    "只输出 JSON，不要输出 Markdown，不要解释。",
+    `必须输出 ${roles.length} 个 fragments，role 必须且只能依次覆盖：${roles.join("、")}。`,
+    "每个 role 的 text 必须是不同内容，不能重复或换标题复用同一句。",
+    "text 必须直接写作品正文，不得写页面策略、编辑说明、contract、intent、content plan 或开发描述。",
+    "不得编造输入中没有的公司名、金额、百分比、排名、日期或具体指标。",
+    "JSON 格式：{\"fragments\":[{\"role\":\"...\",\"label\":\"...\",\"text\":\"...\"}]}",
+    "原始任务提示：",
+    prompt,
+    "上一次不合格输出：",
+    rawOutput.slice(0, 2000),
+  ].join("\n");
+}
+
+function buildRoleRepairPrompt(prompt: string, role: string, label: string, boundary: GroundingBoundary) {
+  return [
+    "请为 PagesCut 内容页补写一个未通过校验的正文片段。",
+    "只输出 JSON，不要输出 Markdown，不要解释。",
+    `只输出 1 个 fragment，role 必须是：${role}。`,
+    `label 可以使用：${label || role}。`,
+    "text 必须是给读者看的作品正文，35-80 字中文，不能写页面策略、编辑说明、contract、intent、content plan 或开发描述。",
+    "text 不能编造输入中没有的公司名、金额、百分比、排名、日期或具体指标。",
+    "JSON 格式：{\"fragments\":[{\"role\":\"...\",\"label\":\"...\",\"text\":\"...\"}]}",
+    "原始任务提示：",
+    prompt,
+    `页型：${boundary.pageRole}`,
+  ].join("\n");
 }
 
 function normalizeOutlineRole(value: unknown): GeneratedOutlinePageRole {
@@ -390,8 +433,11 @@ function buildAllowedSource({ page }: OverviewGenerationRequest | SummaryGenerat
   return [
     `页面类型：${page.pageType}`,
     `主题对象：${getNarrativeTopic(page)}`,
+    `页级大纲：${page.outlineText || "未提供"}`,
+    page.styleText ? `风格参数：${page.styleText}` : "",
+    page.userConstraints ? `用户约束：${page.userConstraints}` : "",
     ...(userSources.length ? userSources.map((source, index) => `用户素材 ${index + 1}：${source}`) : ["用户素材：未提供"]),
-  ];
+  ].filter(Boolean);
 }
 
 function buildDataPrompt(request: ContentPageGenerationRequest) {
@@ -403,7 +449,7 @@ function buildDataPrompt(request: ContentPageGenerationRequest) {
     "JSON 格式：{\"fragments\":[{\"role\":\"dataSummary\",\"label\":\"...\",\"text\":\"...\"}]}",
     "必须输出 5 个 fragments，role 只能是：dataSummary、dataChartBrief、dataChartExplanation、dataTakeaway、dataSourceNote。",
     "每个 role 的 text 必须明显不同；每段 35-75 字中文；只写当前主题的数据页内容，不写页面策略。",
-    "dataChartBrief 写成图表应表达的内容简述，不要编造具体数值；dataChartExplanation 写成图表解释正文。",
+    "dataChartBrief 写成图表表达内容简述，不要编造具体数值；dataChartExplanation 写成图表解释正文。",
     ...buildMetaNarrationPromptLines(),
     ...buildTruthfulnessPromptLines(),
     "允许输入：",
@@ -570,22 +616,49 @@ export class OllamaGenerationProvider implements GenerationProvider {
   }
 
   private async generateDraft(
-    request: OverviewGenerationRequest | SummaryGenerationRequest,
+    request: OverviewGenerationRequest | SummaryGenerationRequest | ContentPageGenerationRequest,
     prompt: string,
     emptyErrorMessage: string,
   ): Promise<GeneratedTextDraftResult> {
     const boundary = buildGroundingBoundary(request);
-    const raw = await this.generateRaw(prompt);
-    const fragments = parseFragments(raw, boundary);
+    let raw = await this.generateRaw(prompt);
+    let effectivePrompt = prompt;
+    let fragments = parseFragments(raw, boundary);
+    if (!fragments.length || hasProviderFallbackText(fragments)) {
+      effectivePrompt = buildDraftRepairPrompt(prompt, raw, boundary);
+      raw = await this.generateRaw(effectivePrompt);
+      fragments = parseFragments(raw, boundary);
+    }
     if (!fragments.length) {
       throw new Error(emptyErrorMessage);
+    }
+    if (hasProviderFallbackText(fragments)) {
+      const repairedFragments = await Promise.all(
+        fragments.map(async (fragment) => {
+          if (!fragment.text.includes("未通过结构或真实性约束")) {
+            return fragment;
+          }
+
+          const roleRepairPrompt = buildRoleRepairPrompt(prompt, fragment.role || fragment.label, fragment.label, boundary);
+          const roleRaw = await this.generateRaw(roleRepairPrompt);
+          const [roleFragment] = parseFragments(roleRaw, boundary).filter((item) => item.role === fragment.role || !item.text.includes("未通过结构或真实性约束"));
+
+          return roleFragment && !roleFragment.text.includes("未通过结构或真实性约束")
+            ? { ...roleFragment, role: fragment.role, label: fragment.label }
+            : fragment;
+        }),
+      );
+      fragments = repairedFragments;
+    }
+    if (hasProviderFallbackText(fragments)) {
+      throw new Error(`${emptyErrorMessage}: repaired output still failed role/content validation`);
     }
 
     return {
       providerType: this.config.providerType,
       model: this.config.model,
       sourceId: `${this.config.providerType}:${this.config.model}`,
-      prompt,
+      prompt: effectivePrompt,
       fragments,
     };
   }

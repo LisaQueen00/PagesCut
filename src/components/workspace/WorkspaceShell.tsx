@@ -408,7 +408,7 @@ function StageTwoWorkspace({
         onSelect={(pageId) => setTaskSelectedPage(task.id, pageId)}
         helperText={
           hasModelCandidate
-            ? "当前显示完整内容页结构；已接入 provider 的页面会标记为模型生成，未通过模型输出的页面会标记 fallback 或规则骨架。"
+            ? "当前显示完整内容页结构；初始候选内容页应走 provider 主路径，未通过模型输出校验的页面会明确标记。"
             : "左侧继续切换页卡；当前整期方案保持不变，不同页面只展示该方案下的页级适配预览。"
         }
         pageGenerationStatusByPageId={selectedVersion.pageGenerationStatusByPageId}
