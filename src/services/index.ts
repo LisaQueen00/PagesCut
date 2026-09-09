@@ -1,11 +1,15 @@
 import { MockOutlineProvider, MockPageGenerationProvider, MockSearchProvider } from "@/services/providers/mockProviders";
-import { generationProviderConfig } from "@/services/generationSettings";
+import { generationProviderConfig as ollamaGenerationProviderConfig } from "@/services/generationSettings";
 import { OllamaGenerationProvider } from "@/services/providers/ollamaGenerationProvider";
-import type { GeneratedOutlinePagePlan, NormalizedTaskInput } from "@/services/providers/types";
+import { DeterministicGenerationProvider } from "@/lib/deterministic";
+import type { GeneratedOutlinePagePlan, GeneratedOutlinePlanResult, NormalizedTaskInput } from "@/services/providers/types";
 import type { ExpressionMode, Page, PageRole, Task, UserProvidedContentBlock, WorkType } from "@/types/domain";
 
 const outlineProvider = new MockOutlineProvider();
-const generationProvider = new OllamaGenerationProvider(generationProviderConfig);
+const deterministicProvider = new DeterministicGenerationProvider();
+const ollamaConfigured = Boolean(ollamaGenerationProviderConfig.endpoint && ollamaGenerationProviderConfig.model);
+const generationProvider = ollamaConfigured ? new OllamaGenerationProvider(ollamaGenerationProviderConfig) : deterministicProvider;
+const generationProviderConfig = ollamaConfigured ? ollamaGenerationProviderConfig : deterministicProvider.config;
 
 function parseDesiredPageCount(prompt: string) {
   const normalized = prompt.replace(/\s+/g, "");
@@ -89,6 +93,13 @@ function normalizeOutlineText(plan: GeneratedOutlinePagePlan) {
 
 function createOutlinePlanSourceBlocks(plan: GeneratedOutlinePagePlan): UserProvidedContentBlock[] {
   if (plan.suggestedPageRole === "data") {
+    const tableData = plan.tableData ?? {
+      columns: ["指标", "观察项", "说明"],
+      rows: [
+        ["核心变化", "待补充", "由后续 source formalization 承接"],
+        ["支撑信号", "待补充", "由后续 source formalization 承接"],
+      ],
+    };
     return [
       {
         id: createId("block"),
@@ -98,30 +109,28 @@ function createOutlinePlanSourceBlocks(plan: GeneratedOutlinePagePlan): UserProv
       {
         id: createId("block"),
         type: "chart_desc",
-        description: plan.sourceNeeds || `${plan.title} 的图表需要突出关键变化、对比关系和判断落点。`,
+        description: plan.chartHint || plan.sourceNeeds || `${plan.title} 的图表需要突出关键变化、对比关系和判断落点。`,
         chartTypeHint: "bar",
       },
       {
         id: createId("block"),
         type: "table",
-        rawInput: "指标,观察项,说明\n核心变化,待补充,由后续 source formalization 承接\n支撑信号,待补充,由后续 source formalization 承接",
-        columns: ["指标", "观察项", "说明"],
-        rows: [
-          ["核心变化", "待补充", "由后续 source formalization 承接"],
-          ["支撑信号", "待补充", "由后续 source formalization 承接"],
-        ],
+        rawInput: [tableData.columns.join(","), ...tableData.rows.map((row) => row.join(","))].join("\n"),
+        columns: tableData.columns,
+        rows: tableData.rows,
       },
     ];
   }
 
   if (plan.suggestedPageRole === "case-study") {
+    const caption = plan.visualCaption || plan.sourceNeeds || `${plan.title} 的案例场景占位，需要后续绑定真实图片来源。`;
     return [
       {
         id: createId("block"),
         type: "image",
-        imageUrl: "mock://outline-case-1",
-        altText: `${plan.title} 场景图`,
-        caption: plan.sourceNeeds || `${plan.title} 的案例场景占位，需要后续绑定真实图片来源。`,
+        imageUrl: "",
+        altText: caption,
+        caption,
       },
       {
         id: createId("block"),
@@ -203,16 +212,20 @@ export const services = {
       { stage: "outline" },
     );
 
+    let outlinePlan: GeneratedOutlinePlanResult | null = null;
     try {
-      const outlinePlan = await generationProvider.generateOutlinePlan(normalized, { stage: "outline" });
+      outlinePlan = await generationProvider.generateOutlinePlan(normalized, { stage: "outline" });
       if (normalized.desiredPageCount && outlinePlan.pages.length < normalized.desiredPageCount) {
         throw new Error(`Outline provider returned ${outlinePlan.pages.length} pages, expected ${normalized.desiredPageCount}`);
       }
-
-      return buildTaskFromOutlinePlan(normalized, outlinePlan.pages);
     } catch (error) {
-      console.warn("Outline provider generation failed; falling back to mock outline.", error);
-      return outlineProvider.generateInitialOutline(normalized, { stage: "outline" });
+      console.warn("Primary outline generation failed; falling back to deterministic engine.", error);
     }
+
+    if (!outlinePlan?.pages.length) {
+      outlinePlan = await deterministicProvider.generateOutlinePlan(normalized, { stage: "outline" });
+    }
+
+    return buildTaskFromOutlinePlan(normalized, outlinePlan.pages);
   },
 };

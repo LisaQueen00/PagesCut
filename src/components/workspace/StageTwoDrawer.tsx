@@ -89,7 +89,7 @@ export function StageTwoDrawer({
               <p>页面生成状态：{formatPageGenerationStatus(selectedPageGenerationStatus)}</p>
               {selectedPageGenerationNote ? <p>生成诊断：{selectedPageGenerationNote}</p> : null}
               <p>方案备注：{isModelTextCandidate(selectedVersion) ? "初始候选内容页应走 provider 主路径；未通过模型输出校验的页面会显示为未通过或规则骨架。" : selectedVersion?.promptNote ?? "初版候选结果"}</p>
-              <p>方案摘要：{isModelTextCandidate(selectedVersion) ? "模型正文候选" : selectedVersion?.variantSummary ?? "-"}</p>
+              <p>方案摘要：{isModelTextCandidate(selectedVersion) ? (selectedVersion?.variantSummary ?? "模型正文候选") : selectedVersion?.variantSummary ?? "-"}</p>
               <p>风格：{page.styleText || "未设置"}</p>
               <p>作品类型：{task.workType === "magazine" ? "刊物" : "报告 / PPT"}</p>
               <p>来源：{selectedVersion?.derivedFromVersionId ? `基于 ${selectedVersion.derivedFromVersionId} 派生的整期方案` : "初始整期候选方案集"}</p>
@@ -131,7 +131,7 @@ export function StageTwoDrawer({
                           <span className="rounded-full bg-[#eef2f7] px-2.5 py-1 text-[11px] text-muted">当前预览</span>
                         ) : null}
                       </div>
-                      <p className="mt-3 text-sm leading-6 text-muted">{isModelTextCandidate(version) ? "模型正文候选" : version.variantSummary}</p>
+                      <p className="mt-3 text-sm leading-6 text-muted">{isModelTextCandidate(version) ? (version.variantSummary || "模型正文候选") : version.variantSummary}</p>
                       {!isModelTextCandidate(version) ? <p className="mt-2 text-xs text-muted/90">{version.promptNote}</p> : null}
                     </button>
                   );

@@ -149,6 +149,11 @@ function normalizePromptTopic(prompt: string, fallback: string) {
     .replace(/^(生成|做|制作|产出)/, "")
     .replace(/^(一期|一份|一个)/, "")
     .replace(/^(关于|围绕)/, "")
+    .replace(/[,，\s]*(?:至少|不少于|不低于)\s*\d+\s*(?:个)?(?:内容)?页.*$/, "")
+    .replace(/[，,。.\s、：:]+$/, "")
+    .replace(/(?:的)?(?:报告|月刊|月报|周报|日报|PPT|幻灯片|作品|简报)$/i, "")
+    .replace(/(?:的)?(?:情况|现状|趋势|分析|介绍|观察|发展)$/, "")
+    .replace(/[，,。.\s、：:]+$/, "")
     .trim();
 
   return clampText(normalized || fallback, 22, fallback);

@@ -9,6 +9,7 @@ import {
   createSummaryOllamaTextFragments,
 } from "@/lib/pageSources";
 import { createSourceAlignmentSnapshot, hydrateHardEditEditableElementAlignment } from "@/lib/hardEditAlignment";
+import { DETERMINISTIC_VARIANT_COUNT } from "@/lib/deterministic";
 import { renderPackagingFormalToHtml } from "@/lib/packagingFormal";
 import { renderPageModelToHtml } from "@/lib/pageModel";
 import { generateCoverContent, generateTocContent, generateTocContentFromComposition } from "@/lib/realContent";
@@ -488,7 +489,7 @@ function createMockGeneratedVersion(
   };
 }
 
-async function createTextPageModelGeneratedSourceSet(page: Page, promptNote: string) {
+async function createTextPageModelGeneratedSourceSet(page: Page, promptNote: string, variant = 0) {
   const isDataPage = page.pageType.includes("数据");
   const isCasePage = page.pageRole === "case-study" || page.pageType.includes("案例");
   const isFeaturePage = page.pageRole === "feature" && !isDataPage && !isCasePage;
@@ -497,15 +498,18 @@ async function createTextPageModelGeneratedSourceSet(page: Page, promptNote: str
     return null;
   }
 
+  // 变体通过 page.renderSeed 传递给生成 provider（确定性引擎据此选择不同句式）。
+  const variantPage = variant !== 0 ? { ...page, renderSeed: variant } : page;
+
   const draft = page.pageRole === "summary"
-    ? await services.generationProvider.generateSummaryDraft({ page, promptNote }, { stage: "page-generation" })
+    ? await services.generationProvider.generateSummaryDraft({ page: variantPage, promptNote }, { stage: "page-generation" })
     : isDataPage
-      ? await services.generationProvider.generateDataDraft({ page, promptNote }, { stage: "page-generation" })
+      ? await services.generationProvider.generateDataDraft({ page: variantPage, promptNote }, { stage: "page-generation" })
       : isCasePage
-        ? await services.generationProvider.generateCaseDraft({ page, promptNote }, { stage: "page-generation" })
+        ? await services.generationProvider.generateCaseDraft({ page: variantPage, promptNote }, { stage: "page-generation" })
         : isFeaturePage
-          ? await services.generationProvider.generateFeatureDraft({ page, promptNote }, { stage: "page-generation" })
-          : await services.generationProvider.generateOverviewDraft({ page, promptNote }, { stage: "page-generation" });
+          ? await services.generationProvider.generateFeatureDraft({ page: variantPage, promptNote }, { stage: "page-generation" })
+          : await services.generationProvider.generateOverviewDraft({ page: variantPage, promptNote }, { stage: "page-generation" });
 
   const fragments = page.pageRole === "summary"
     ? createSummaryOllamaTextFragments(page, draft)
@@ -559,40 +563,49 @@ async function createInitialProviderBackedPageVersions(taskId: string, pages: Pa
     return createInitialPageVersions(taskId, pages);
   }
 
-  const generatedPageSourceSets = new Map<string, PageSourceSet>();
-  const failedRoles: string[] = [];
+  // 为每个表达变体各生成一套 source set，让 Stage 2 有多个可选候选。
+  const sourceSetsByVariant = new Map<number, Map<string, PageSourceSet>>();
   const failedPageIds = new Set<string>();
   const pageGenerationNotesByPageId = new Map<string, string>();
 
-  await Promise.all(
-    targetPages.map(async (page) => {
-      try {
-        const sourceSet = await createTextPageModelGeneratedSourceSet(page, `初始候选内容生成：${page.outlineText || page.pageType}`);
-        if (sourceSet) {
-          generatedPageSourceSets.set(page.id, sourceSet);
-          pageGenerationNotesByPageId.set(page.id, "provider 输出已通过初始候选模型校验");
+  for (let variant = 0; variant < DETERMINISTIC_VARIANT_COUNT; variant += 1) {
+    const sourceSets = new Map<string, PageSourceSet>();
+    await Promise.all(
+      targetPages.map(async (page) => {
+        try {
+          const sourceSet = await createTextPageModelGeneratedSourceSet(page, `初始候选内容生成：${page.outlineText || page.pageType}`, variant);
+          if (sourceSet) {
+            sourceSets.set(page.id, sourceSet);
+            if (variant === 0) {
+              pageGenerationNotesByPageId.set(page.id, "provider 输出已通过初始候选模型校验");
+            }
+          }
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          failedPageIds.add(page.id);
+          if (variant === 0) {
+            pageGenerationNotesByPageId.set(page.id, reason);
+          }
+          console.warn(`${page.pageRole} variant ${variant} initial local model generation failed; marking page as model-validation-failed.`, error);
         }
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        failedRoles.push(page.pageRole);
-        failedPageIds.add(page.id);
-        pageGenerationNotesByPageId.set(page.id, reason);
-        console.warn(`${page.pageRole} initial local model generation failed; marking page as model-validation-failed.`, error);
-      }
-    }),
-  );
+      }),
+    );
+    sourceSetsByVariant.set(variant, sourceSets);
+  }
 
+  const baseSets = sourceSetsByVariant.get(0) ?? new Map<string, PageSourceSet>();
+  const modelLabel = services.generationProviderConfig.model;
   const sourceSummary =
-    generatedPageSourceSets.size === targetPages.length
-      ? `本地 ${services.generationProviderConfig.model} 生成内容页初始候选内容`
-      : generatedPageSourceSets.size > 0
-        ? `本地 ${services.generationProviderConfig.model} 部分生成初始候选内容，${failedRoles.join(" / ")} 未通过初始候选模型校验`
+    baseSets.size === targetPages.length
+      ? `${modelLabel} 生成内容页初始候选内容（${DETERMINISTIC_VARIANT_COUNT} 个表达变体）`
+      : baseSets.size > 0
+        ? `${modelLabel} 部分生成初始候选内容，部分页面未通过初始候选模型校验`
         : `本地模型不可用，初始候选内容页未通过模型生成`;
 
   const pageGenerationStatusByPageId = Object.fromEntries(
     pages.map((page) => [
       page.id,
-      generatedPageSourceSets.has(page.id)
+      baseSets.has(page.id)
         ? "model-generated"
         : failedPageIds.has(page.id)
           ? "fallback"
@@ -601,14 +614,17 @@ async function createInitialProviderBackedPageVersions(taskId: string, pages: Pa
             : "rule-skeleton",
     ] satisfies [string, PageGenerationStatus]),
   );
-  const pageGenerationNotes = Object.fromEntries(pageGenerationNotesByPageId);
 
-  return createInitialPageVersions(taskId, pages, generatedPageSourceSets, { versionCount: 1 }).map((version) => ({
+  return createInitialPageVersions(taskId, pages, baseSets, {
+    versionCount: DETERMINISTIC_VARIANT_COUNT,
+    providedPageSourceSetsByVersion: sourceSetsByVariant,
+    forceUniformFamily: true,
+  }).map((version, index) => ({
     ...version,
     promptNote: sourceSummary,
-    variantSummary: "模型正文候选",
+    variantSummary: `模型正文候选 · 表达变体 ${index + 1}`,
     pageGenerationStatusByPageId,
-    pageGenerationNotesByPageId: pageGenerationNotes,
+    pageGenerationNotesByPageId: Object.fromEntries(pageGenerationNotesByPageId),
   }));
 }
 

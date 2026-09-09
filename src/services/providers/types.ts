@@ -28,7 +28,7 @@ export interface ProviderContext {
   stage: "outline" | "page-generation";
 }
 
-export type GenerationProviderType = "ollama-local" | "remote-placeholder";
+export type GenerationProviderType = "ollama-local" | "remote-placeholder" | "deterministic";
 export type GenerationProviderConfigSource =
   | "workspace-default"
   | "environment"
@@ -96,6 +96,12 @@ export interface GeneratedOutlinePagePlan {
   userConstraints: string;
   sourceNeeds?: string;
   layoutIntent?: string;
+  /** 确定性引擎为 data 页提供的结构化表格数据（可选）。 */
+  tableData?: { columns: string[]; rows: string[][] };
+  /** 确定性引擎为 data 页提供的图表标题（可选）。 */
+  chartHint?: string;
+  /** 确定性引擎为 case 页提供的视觉说明（可选）。 */
+  visualCaption?: string;
 }
 
 export interface GeneratedOutlinePlanResult {

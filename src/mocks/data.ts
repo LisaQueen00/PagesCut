@@ -1500,21 +1500,27 @@ function createMockVersionSet(
   variantSeed = 0,
   providedPageSourceSets: Map<string, PageSourceSet> = new Map(),
   versionCount = INITIAL_MOCK_VERSION_COUNT,
+  options: {
+    providedPageSourceSetsByVersion?: Map<number, Map<string, PageSourceSet>>;
+    forceUniformFamily?: boolean;
+  } = {},
 ): PageVersion[] {
   const now = Date.now();
   return Array.from({ length: versionCount }, (_, index) => {
     const versionLabel = `V${index + 1}`;
-    const fixture = MOCK_VALIDATION_FIXTURES[index] ?? MOCK_VALIDATION_FIXTURES[0];
+    const sourceSets = options.providedPageSourceSetsByVersion?.get(index) ?? providedPageSourceSets;
+    const fixture = options.forceUniformFamily ? MOCK_VALIDATION_FIXTURES[0] : (MOCK_VALIDATION_FIXTURES[index] ?? MOCK_VALIDATION_FIXTURES[0]);
+    const family = options.forceUniformFamily ? 0 : index;
     const promptNote = `${fixture.label} · ${fixture.summary}`;
     const pageModelsByPageId = Object.fromEntries(
       pages
-        .map((page, pageIndex) => [page.id, buildMockPageModel(page, versionLabel, variantSeed + index + pageIndex, index, providedPageSourceSets.get(page.id))] as const)
+        .map((page, pageIndex) => [page.id, buildMockPageModel(page, versionLabel, variantSeed + index + pageIndex, family, sourceSets.get(page.id))] as const)
         .filter((entry): entry is readonly [string, PageModel] => Boolean(entry[1])),
     );
     const pageGenerationStatusByPageId = Object.fromEntries(
       pages.map((page) => [
         page.id,
-        providedPageSourceSets.has(page.id) ? "model-generated" : "rule-skeleton",
+        sourceSets.has(page.id) ? "model-generated" : "rule-skeleton",
       ] satisfies [string, PageGenerationStatus]),
     );
     return {
@@ -1522,9 +1528,9 @@ function createMockVersionSet(
       taskId,
       versionLabel,
       promptNote,
-      variantSummary: getMockVersionStrategySummary(index),
+      variantSummary: getMockVersionStrategySummary(family),
       derivedFromVersionId: null,
-      previewsByPageId: buildSchemePreviewMap(pages, versionLabel, promptNote, variantSeed + index, index, providedPageSourceSets),
+      previewsByPageId: buildSchemePreviewMap(pages, versionLabel, promptNote, variantSeed + index, family, sourceSets),
       pageModelsByPageId,
       pageGenerationStatusByPageId,
       isSelected: index === 0,
@@ -1538,9 +1544,16 @@ export function createInitialPageVersions(
   taskId: string,
   pages: Page[],
   providedPageSourceSets: Map<string, PageSourceSet> = new Map(),
-  options: { versionCount?: number } = {},
+  options: {
+    versionCount?: number;
+    providedPageSourceSetsByVersion?: Map<number, Map<string, PageSourceSet>>;
+    forceUniformFamily?: boolean;
+  } = {},
 ): PageVersion[] {
-  return createMockVersionSet(taskId, pages, 0, providedPageSourceSets, options.versionCount ?? INITIAL_MOCK_VERSION_COUNT);
+  return createMockVersionSet(taskId, pages, 0, providedPageSourceSets, options.versionCount ?? INITIAL_MOCK_VERSION_COUNT, {
+    providedPageSourceSetsByVersion: options.providedPageSourceSetsByVersion,
+    forceUniformFamily: options.forceUniformFamily,
+  });
 }
 
 export function createDeferredPackagingPages(taskId: string, startIndex: number): Page[] {
