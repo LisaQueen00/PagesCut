@@ -2,14 +2,30 @@ import { MockOutlineProvider, MockPageGenerationProvider, MockSearchProvider } f
 import { generationProviderConfig as ollamaGenerationProviderConfig } from "@/services/generationSettings";
 import { OllamaGenerationProvider } from "@/services/providers/ollamaGenerationProvider";
 import { DeterministicGenerationProvider } from "@/lib/deterministic";
+import { WebLlmGenerationProvider, getWebLlmStatus } from "@/lib/webLlm";
 import type { GeneratedOutlinePagePlan, GeneratedOutlinePlanResult, NormalizedTaskInput } from "@/services/providers/types";
 import type { ExpressionMode, Page, PageRole, Task, UserProvidedContentBlock, WorkType } from "@/types/domain";
 
 const outlineProvider = new MockOutlineProvider();
 const deterministicProvider = new DeterministicGenerationProvider();
+export const webLlmProvider = new WebLlmGenerationProvider();
 const ollamaConfigured = Boolean(ollamaGenerationProviderConfig.endpoint && ollamaGenerationProviderConfig.model);
-const generationProvider = ollamaConfigured ? new OllamaGenerationProvider(ollamaGenerationProviderConfig) : deterministicProvider;
-const generationProviderConfig = ollamaConfigured ? ollamaGenerationProviderConfig : deterministicProvider.config;
+const ollamaProvider = ollamaConfigured ? new OllamaGenerationProvider(ollamaGenerationProviderConfig) : null;
+const baseGenerationProvider = ollamaProvider ?? deterministicProvider;
+const baseGenerationProviderConfig = ollamaProvider ? ollamaGenerationProviderConfig : deterministicProvider.config;
+
+/** 运行时解析当前生效的生成 provider：WebLLM 就绪时优先，否则回退 Ollama / 确定性。 */
+export function getGenerationProvider() {
+  return getWebLlmStatus() === "ready" ? webLlmProvider : baseGenerationProvider;
+}
+
+export function getGenerationModelLabel() {
+  return getWebLlmStatus() === "ready" ? webLlmProvider.config.model : baseGenerationProviderConfig.model;
+}
+
+// 供兼容旧引用：初始生成默认走 base（WebLLM 未启用时）。
+const generationProvider = baseGenerationProvider;
+const generationProviderConfig = baseGenerationProviderConfig;
 
 function parseDesiredPageCount(prompt: string) {
   const normalized = prompt.replace(/\s+/g, "");
@@ -201,6 +217,9 @@ export const services = {
   pageGenerationProvider: new MockPageGenerationProvider(),
   generationProvider,
   generationProviderConfig,
+  getGenerationProvider,
+  getGenerationModelLabel,
+  webLlmProvider,
   searchProvider: new MockSearchProvider(),
   async createTaskFromPrompt(prompt: string, workType: WorkType) {
     const normalized = await outlineProvider.normalizeTaskInput(

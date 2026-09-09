@@ -45,3 +45,13 @@ npx tsx --tsconfig tsconfig.app.json scripts/render-png.mts
 - `preview/variant-comparison.png` — 同一页 3 个表达变体的对比图
 
 `preview/` 与 `scripts/*.ttf` 已加入 `.gitignore`，不会进入版本库。
+
+## 3. `smoke-webllm.mts` — WebLLM 逻辑冒烟测试
+
+在不依赖浏览器 WebGPU 的前提下，验证 WebLLM 增强层的非推理逻辑：状态机、grounding 上下文、角色列表、未启用时的回退行为、Node 环境下的 `unsupported` 判定。
+
+```bash
+npx tsx --tsconfig tsconfig.app.json scripts/smoke-webllm.mts
+```
+
+> 真正的模型推理需要浏览器 WebGPU，无法在 Node 沙箱验证；请在 Chrome / Edge 113+ 中通过应用内的「启用本地模型」按钮验证。

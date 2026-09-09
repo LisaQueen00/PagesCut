@@ -14,6 +14,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@langchain/core": "^0.3.66",
     "@langchain/langgraph": "^0.2.74",
+    "@mlc-ai/web-llm": "^0.2.85",
     "langchain": "^0.3.30",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

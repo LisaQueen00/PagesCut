@@ -715,3 +715,49 @@ export class DeterministicGenerationProvider implements GenerationProvider {
     };
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * 7. 供增强 provider（如 WebLLM）复用的 grounding 上下文
+ * ------------------------------------------------------------------ */
+
+export interface PageGroundingContext {
+  subject: string;
+  period: string;
+  metrics: { label: string; previous: string; current: string; change: string }[];
+}
+
+/** 从一页还原其主题 + 指标上下文，供 WebLLM 生成「有依据、不自相矛盾」的正文。 */
+export function describePageForPrompt(page: Page): PageGroundingContext {
+  const profile = resolveProfile(extractSubjectFromPage(page));
+  return {
+    subject: profile.subject,
+    period: profile.yearLabel || "本期",
+    metrics: profile.metrics.map((metric) => ({
+      label: metric.label,
+      previous: metric.previous,
+      current: metric.current,
+      change: metric.change,
+    })),
+  };
+}
+
+/** 返回某页当前页型期望的正文 role 列表。 */
+export function getExpectedDraftRoles(page: Page): string[] {
+  const role = page.pageRole;
+  const isData = page.pageType.includes("数据");
+  const isCase = role === "case-study" || page.pageType.includes("案例");
+  const isFeature = role === "feature" && !isData && !isCase;
+  if (role === "summary") {
+    return [...SUMMARY_ROLES];
+  }
+  if (isData) {
+    return [...DATA_ROLES];
+  }
+  if (isCase) {
+    return [...CASE_ROLES];
+  }
+  if (isFeature) {
+    return [...FEATURE_ROLES];
+  }
+  return [...OVERVIEW_ROLES];
+}

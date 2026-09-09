@@ -501,15 +501,16 @@ async function createTextPageModelGeneratedSourceSet(page: Page, promptNote: str
   // 变体通过 page.renderSeed 传递给生成 provider（确定性引擎据此选择不同句式）。
   const variantPage = variant !== 0 ? { ...page, renderSeed: variant } : page;
 
+  const generationProvider = services.getGenerationProvider();
   const draft = page.pageRole === "summary"
-    ? await services.generationProvider.generateSummaryDraft({ page: variantPage, promptNote }, { stage: "page-generation" })
+    ? await generationProvider.generateSummaryDraft({ page: variantPage, promptNote }, { stage: "page-generation" })
     : isDataPage
-      ? await services.generationProvider.generateDataDraft({ page: variantPage, promptNote }, { stage: "page-generation" })
+      ? await generationProvider.generateDataDraft({ page: variantPage, promptNote }, { stage: "page-generation" })
       : isCasePage
-        ? await services.generationProvider.generateCaseDraft({ page: variantPage, promptNote }, { stage: "page-generation" })
+        ? await generationProvider.generateCaseDraft({ page: variantPage, promptNote }, { stage: "page-generation" })
         : isFeaturePage
-          ? await services.generationProvider.generateFeatureDraft({ page: variantPage, promptNote }, { stage: "page-generation" })
-          : await services.generationProvider.generateOverviewDraft({ page: variantPage, promptNote }, { stage: "page-generation" });
+          ? await generationProvider.generateFeatureDraft({ page: variantPage, promptNote }, { stage: "page-generation" })
+          : await generationProvider.generateOverviewDraft({ page: variantPage, promptNote }, { stage: "page-generation" });
 
   const fragments = page.pageRole === "summary"
     ? createSummaryOllamaTextFragments(page, draft)
@@ -594,7 +595,7 @@ async function createInitialProviderBackedPageVersions(taskId: string, pages: Pa
   }
 
   const baseSets = sourceSetsByVariant.get(0) ?? new Map<string, PageSourceSet>();
-  const modelLabel = services.generationProviderConfig.model;
+  const modelLabel = services.getGenerationModelLabel();
   const sourceSummary =
     baseSets.size === targetPages.length
       ? `${modelLabel} 生成内容页初始候选内容（${DETERMINISTIC_VARIANT_COUNT} 个表达变体）`
@@ -2398,7 +2399,7 @@ export const useAppStore = create<AppState>()(
         if (focusPage?.pageRole === "overview" || focusPage?.pageRole === "summary") {
           try {
             modelSourceSet = await createTextPageModelGeneratedSourceSet(focusPage, trimmedPrompt);
-            generationSummary = `本地 ${services.generationProviderConfig.model} 生成 ${focusPage.pageRole} 草稿`;
+            generationSummary = `本地 ${services.getGenerationModelLabel()} 生成 ${focusPage.pageRole} 草稿`;
           } catch (error) {
             console.warn(`${focusPage.pageRole} local model generation failed; marking regeneration as fallback.`, error);
             generationSummary = `本地模型不可用，${focusPage.pageRole} 标记为 fallback`;

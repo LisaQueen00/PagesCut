@@ -2,7 +2,17 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { QuickActionCard } from "@/components/home/QuickActionCard";
 import { useAppStore } from "@/store/appStore";
+import { useWebLlmStatus } from "@/hooks/useWebLlmStatus";
 import type { WorkType } from "@/types/domain";
+
+const WEBLLM_STATUS_LABEL: Record<string, string> = {
+  idle: "未启用",
+  checking: "检测 WebGPU…",
+  loading: "加载模型中…",
+  ready: "已就绪",
+  error: "加载失败",
+  unsupported: "浏览器不支持 WebGPU",
+};
 
 export function HomePage() {
   const [prompt, setPrompt] = useState("");
@@ -10,6 +20,7 @@ export function HomePage() {
   const createTask = useAppStore((state) => state.createTask);
   const isGenerating = useAppStore((state) => state.isGenerating);
   const tasks = useAppStore((state) => state.tasks);
+  const webLlm = useWebLlmStatus();
 
   const stats = useMemo(
     () => [
@@ -116,6 +127,55 @@ export function HomePage() {
           badge="Assets"
           onClick={() => void handleCreateTask("magazine", "我想基于已有素材整理一期品牌内容月刊")}
         />
+      </section>
+
+      <section className="rounded-[28px] border border-line/70 bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-[240px]">
+            <div className="flex items-center gap-3">
+              <p className="text-xs uppercase tracking-[0.22em] text-muted">Enhancement</p>
+              <span
+                className={`rounded-full px-2.5 py-1 text-[11px] ${
+                  webLlm.status === "ready"
+                    ? "bg-emerald-50 text-emerald-700"
+                    : webLlm.status === "loading" || webLlm.status === "checking"
+                      ? "bg-amber-50 text-amber-700"
+                      : "bg-[#eef2f7] text-muted"
+                }`}
+              >
+                {WEBLLM_STATUS_LABEL[webLlm.status] ?? webLlm.status}
+              </span>
+            </div>
+            <h3 className="mt-2 text-base font-semibold text-ink">浏览器本地模型增强（WebLLM）</h3>
+            <p className="mt-1 text-sm leading-6 text-muted">
+              默认走确定性引擎（开箱即用）。开启后，正文由浏览器内的本地小模型重写，增加深度与自然度；数据不出本地。
+            </p>
+            {webLlm.detail ? <p className="mt-2 text-xs text-muted/90">{webLlm.detail}</p> : null}
+          </div>
+          <div className="flex flex-wrap gap-3">
+            {webLlm.status === "ready" ? (
+              <button
+                type="button"
+                onClick={webLlm.reset}
+                className="rounded-full border border-line bg-white px-5 py-3 text-sm font-medium text-ink transition hover:border-ink/20"
+              >
+                停用本地模型
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void webLlm.enable()}
+                disabled={webLlm.status === "loading" || webLlm.status === "checking"}
+                className="rounded-full bg-ink px-5 py-3 text-sm font-medium text-white transition hover:bg-[#202632] disabled:cursor-not-allowed disabled:bg-slate-400"
+              >
+                {webLlm.status === "loading" || webLlm.status === "checking" ? "加载中…" : "启用本地模型"}
+              </button>
+            )}
+          </div>
+        </div>
+        <p className="mt-3 text-xs text-muted">
+          需要支持 WebGPU 的浏览器（Chrome / Edge 113+）；首次启用会下载约数百 MB 的模型权重并缓存到本地。
+        </p>
       </section>
     </div>
   );
