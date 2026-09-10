@@ -139,7 +139,8 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
 # PagesCut 预览/验证产物（可由 scripts/full-pipeline.mts 与 scripts/render-png.mts 重新生成）
-preview/
+# 只忽略仓库根目录的 preview/；docs/preview/ 是提交给人查看的成品，保留
+/preview/
 
 # 用于预览截图生成的中文字体（体积较大，不入库）
 scripts/*.ttf
