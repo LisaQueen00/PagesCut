@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import opentype from "opentype.js";
 import sharp from "sharp";
 /**
@@ -34,7 +35,7 @@ const bold = opentype.parse(readFileSync("scripts/NotoSansSC-Bold.ttf") as unkno
 function advance(text: string, size: number, weight: "regular" | "bold" = "regular") {
   return (weight === "bold" ? bold : regular).getAdvanceWidth(text, size);
 }
-function wrap(text: string, maxWidth: number, size: number, weight: "regular" | "bold" = "regular") {
+export function wrap(text: string, maxWidth: number, size: number, weight: "regular" | "bold" = "regular") {
   const lines: string[] = [];
   let cur = "";
   for (const ch of text) {
@@ -48,7 +49,7 @@ function wrap(text: string, maxWidth: number, size: number, weight: "regular" | 
   if (cur) lines.push(cur);
   return lines.length ? lines : [""];
 }
-function textEl(text: string, x: number, y: number, size: number, color: string, weight: "regular" | "bold" = "regular", opacity = 1) {
+export function textEl(text: string, x: number, y: number, size: number, color: string, weight: "regular" | "bold" = "regular", opacity = 1) {
   const font = weight === "bold" ? bold : regular;
   const path = font.getPath(text, x, y, size);
   return `<path d="${path.toPathData(2)}" fill="${color}" ${opacity < 1 ? `fill-opacity="${opacity}"` : ""}/>`;
@@ -62,8 +63,8 @@ const THEMES: Record<string, { accent: string; soft: string; border: string }> =
   summary: { accent: "#7c3aed", soft: "#f3effd", border: "#e2d9f5" },
 };
 
-const W = 920;
-const H = 1301;
+export const W = 920;
+export const H = 1301;
 const PAD = 28;
 const GAP = 16;
 
@@ -241,7 +242,7 @@ function column(blocks: Card[], x: number, y0: number, w: number, maxH: number):
 }
 
 /* ---------- 页面渲染 ---------- */
-function renderPage(type: string, data: Record<string, any>): string {
+export function renderPage(type: string, data: Record<string, any>): string {
   const theme = THEMES[type] ?? THEMES.overview;
   const contentW = W - PAD * 2;
   const mainW = Math.round(contentW * 0.56);
@@ -345,7 +346,13 @@ function signalCard(t: { accent: string; soft: string; border: string }, x: numb
   return { x, y, w, h, svg };
 }
 
-/* ---------- 主流程 ---------- */
+/* ---------- 主流程（仅在直接运行时执行） ---------- */
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  await main();
+}
+
+async function main() {
 const provider = new DeterministicGenerationProvider();
 const prompt = "请生成一份关于 2024 年 AI 大模型落地情况的报告，至少 6 页";
 const plan = await provider.generateOutlinePlan({ taskType: "report", prompt, normalizedInstruction: "", desiredPageCount: 6 }, { stage: "outline" });
@@ -476,3 +483,4 @@ await sharp({ create: { width: montageW, height: montageH, channels: 4, backgrou
 console.log(`✓ 变体对比图 -> preview/variant-comparison.png`);
 
 console.log("\n完成。PNG 输出到 preview/png/ 与 preview/variant-comparison.png");
+}
